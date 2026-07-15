@@ -7,6 +7,7 @@
 import glob
 import os
 import sys
+import time
 
 import joblib
 import numpy as np
@@ -42,14 +43,22 @@ if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 from feature_presets import PRESETS  # noqa: E402
 from feature_prep import (  # noqa: E402
+    Timer,
     apply_bmi_imputer,
+    apply_reward_thresholds,
     fit_bmi_imputer,
+    fit_kaiser_finetuned,
+    fit_reward_thresholds,
     fit_site_models,
-    predict_site_model,
+    predict_with_kaiser_override,
+    threshold_for_patient,
 )
 
 DEFAULT_PRESET = "submit"
 EXTRACT_CACHE_PRESET = "extract_all"
+REWARD_THRESHOLD_MODE = "site_decade"
+KAISER_FINETUNE = True
+KAISER_ALT_PRESET = "caisr_autonomic"  # separate feature head for I0006; None to disable
 
 
 def _safe(vals, n):
@@ -416,6 +425,139 @@ def extract_all_features(record, data_folder, csv_path=DEFAULT_CSV_PATH, preset=
     return feats, blocks_name
 
 
+def predict_from_features(model, feats: np.ndarray, age: float, site: str) -> tuple[bool, float]:
+    """Score one patient from a pre-extracted feature vector."""
+    site_models = model.get("site_models")
+    clf = model.get("model") if site_models is None else None
+    reward_thresholds = model.get("reward_thresholds")
+    threshold = model.get("threshold", 0.5)
+    n_features = model.get("n_features")
+    bmi_imputer = model.get("bmi_imputer")
+    kaiser_finetune = model.get("kaiser_finetune", KAISER_FINETUNE)
+    kaiser_alt_models = model.get("kaiser_alt_models")
+    use_alt = kaiser_alt_models is not None and str(site) == "I0006"
+    infer_n = model.get("kaiser_alt_n_features") if use_alt else n_features
+
+    feats = np.asarray(feats, dtype=np.float32).ravel()
+    if infer_n and feats.size != infer_n:
+        fixed = np.full(infer_n, np.nan, dtype=np.float32)
+        fixed[: min(infer_n, feats.size)] = feats[:infer_n]
+        feats = fixed
+    elif n_features and feats.size != n_features:
+        fixed = np.full(n_features, np.nan, dtype=np.float32)
+        fixed[: min(n_features, feats.size)] = feats[:n_features]
+        feats = fixed
+    X = feats.reshape(1, -1)
+    if bmi_imputer and not use_alt:
+        X = apply_bmi_imputer(X, np.asarray([site]), bmi_imputer)
+    try:
+        if use_alt:
+            prob = float(predict_with_kaiser_override(
+                kaiser_alt_models, X, np.asarray([site]), use_kaiser_finetuned=False)[0])
+        elif site_models:
+            prob = float(predict_with_kaiser_override(
+                site_models, X, np.asarray([site]), use_kaiser_finetuned=kaiser_finetune)[0])
+        else:
+            prob = float(clf.predict_proba(X)[0][1])
+    except Exception:
+        prob = 0.0
+    if not np.isfinite(prob):
+        prob = 0.0
+    if reward_thresholds:
+        thr = threshold_for_patient(age, str(site), reward_thresholds)
+    else:
+        thr = threshold
+    return bool(prob > thr), float(prob)
+
+
+def fit_and_save_model(
+    X: np.ndarray,
+    y: np.ndarray,
+    sites: np.ndarray,
+    ages_train: np.ndarray,
+    feat_names: list,
+    model_folder: str,
+    *,
+    Xa: np.ndarray | None = None,
+    alt_names: list | None = None,
+    verbose: bool = True,
+) -> dict:
+    """Train site models, reward thresholds, and save model.sav."""
+    timer = Timer()
+    with timer.section("bmi_impute_sec"):
+        bmi_imputer = fit_bmi_imputer(X, sites, feat_names)
+        X = apply_bmi_imputer(X, sites, bmi_imputer)
+
+    if verbose:
+        print(f"Training on {X.shape[0]} patients, {X.shape[1]} features, "
+              f"prevalence={y.mean():.3f}")
+
+    with timer.section("fit_models_sec"):
+        models = fit_site_models(X, y, sites)
+        if KAISER_FINETUNE:
+            models = fit_kaiser_finetuned(models, X, y, sites)
+
+    kaiser_alt_models = None
+    kaiser_alt_feat_names = None
+    if Xa is not None and alt_names is not None:
+        with timer.section("kaiser_alt_fit_sec"):
+            imp_a = fit_bmi_imputer(Xa, sites, alt_names)
+            Xa = apply_bmi_imputer(Xa, sites, imp_a)
+            kaiser_alt_models = fit_site_models(Xa, y, sites)
+            kaiser_alt_feat_names = alt_names
+
+    with timer.section("fit_reward_thresholds_sec"):
+        train_probs = predict_with_kaiser_override(
+            models, X, sites, use_kaiser_finetuned=KAISER_FINETUNE)
+        if kaiser_alt_models is not None:
+            km = sites == "I0006"
+            if km.any():
+                train_probs[km] = predict_with_kaiser_override(
+                    kaiser_alt_models, Xa[km], sites[km], use_kaiser_finetuned=False)
+        reward_thresholds = fit_reward_thresholds(
+            y, train_probs, ages_train, sites, mode=REWARD_THRESHOLD_MODE,
+        )
+
+    threshold = float(reward_thresholds["global"])
+    timings = timer.as_dict()
+    timings["n_train"] = int(X.shape[0])
+    timings["n_features"] = int(X.shape[1])
+    timings["train_total_sec"] = round(sum(timer.times.values()), 4)
+
+    payload = {
+        "model": models["global"],
+        "site_models": models,
+        "bmi_imputer": bmi_imputer,
+        "reward_thresholds": reward_thresholds,
+        "threshold": threshold,
+        "feature_names": feat_names,
+        "n_features": int(X.shape[1]),
+        "preset": DEFAULT_PRESET,
+        "kaiser_finetune": KAISER_FINETUNE,
+        "kaiser_alt_preset": KAISER_ALT_PRESET,
+        "kaiser_alt_models": kaiser_alt_models,
+        "kaiser_alt_feature_names": kaiser_alt_feat_names,
+        "kaiser_alt_n_features": len(kaiser_alt_feat_names) if kaiser_alt_feat_names else None,
+        "reward_threshold_mode": REWARD_THRESHOLD_MODE,
+        "timings": timings,
+    }
+    os.makedirs(model_folder, exist_ok=True)
+    save_model(model_folder, payload)
+    if verbose:
+        site_list = [k for k in models if k != "global"]
+        print(f"Saved model (preset={DEFAULT_PRESET}, site_models={site_list}).")
+        print(f"Reward thresholds mode={REWARD_THRESHOLD_MODE}, global thr={threshold:.3f}")
+        in_sample = apply_reward_thresholds(
+            train_probs, ages_train, sites, reward_thresholds,
+        )
+        from evaluate_model import compute_prevalence, compute_reward
+        age_to_prev = compute_prevalence(ages_train, y, ages_train, gap=2)
+        r = float(compute_reward(y, in_sample, ages_train, age_to_prev))
+        print(f"In-sample reward (train probs + fitted thresholds): {r:+.3f}")
+        print(f"Timings (s): {timings}")
+    return payload
+
+
 def _reward_optimal_threshold(labels):
     pi = float(np.mean(labels)) if len(labels) else 0.5
     return min(max(pi, 1e-3), 1 - 1e-3)
@@ -427,53 +569,58 @@ def train_model(data_folder, model_folder, verbose, csv_path=DEFAULT_CSV_PATH):
     if len(records) == 0:
         raise FileNotFoundError("No data were provided.")
 
+    ages_train = []
+    timer = Timer()
+
     if verbose:
         print(f"Extracting features (preset={DEFAULT_PRESET}) from {len(records)} records...")
     X, y, sites, feat_names = [], [], [], None
-    for rec in tqdm(records, disable=not verbose, unit="rec"):
-        pid = rec[HEADERS["bids_folder"]]
-        try:
-            label = load_diagnoses(demo_file, pid)
-        except Exception:
-            continue
-        if label not in (0, 1):
-            continue
-        try:
-            feats, feat_names = extract_all_features(
-                rec, data_folder, csv_path, preset=DEFAULT_PRESET)
-        except Exception as e:
-            if verbose:
-                tqdm.write(f"  ! skipping {pid}: {e}")
-            continue
-        X.append(feats)
-        y.append(label)
-        sites.append(rec[HEADERS["site_id"]])
+    Xa_list = [] if KAISER_ALT_PRESET else None
+    alt_names = None
+    with timer.section("feature_extraction_sec"):
+        for rec in tqdm(records, disable=not verbose, unit="rec"):
+            pid = rec[HEADERS["bids_folder"]]
+            sess = rec[HEADERS["session_id"]]
+            try:
+                label = load_diagnoses(demo_file, pid)
+            except Exception:
+                continue
+            if label not in (0, 1):
+                continue
+            try:
+                feats, feat_names = extract_all_features(
+                    rec, data_folder, csv_path, preset=DEFAULT_PRESET)
+            except Exception as e:
+                if verbose:
+                    tqdm.write(f"  ! skipping {pid}: {e}")
+                continue
+            if KAISER_ALT_PRESET and KAISER_ALT_PRESET in PRESETS:
+                try:
+                    fa, alt_names = extract_all_features(
+                        rec, data_folder, csv_path, preset=KAISER_ALT_PRESET)
+                    Xa_list.append(fa)
+                except Exception:
+                    continue
+            X.append(feats)
+            y.append(label)
+            sites.append(rec[HEADERS["site_id"]])
+            try:
+                demo = load_demographics(demo_file, pid, sess)
+                ages_train.append(float(load_age(demo)))
+            except Exception:
+                ages_train.append(float("nan"))
 
     X = np.asarray(X, dtype=np.float32)
     y = np.asarray(y, dtype=int)
     sites = np.asarray(sites)
-    bmi_imputer = fit_bmi_imputer(X, sites, feat_names)
-    X = apply_bmi_imputer(X, sites, bmi_imputer)
-    if verbose:
-        print(f"Training on {X.shape[0]} patients, {X.shape[1]} features, "
-              f"prevalence={y.mean():.3f}")
+    ages_train = np.asarray(ages_train, dtype=np.float64)
 
-    models = fit_site_models(X, y, sites)
-    threshold = _reward_optimal_threshold(y)
-    os.makedirs(model_folder, exist_ok=True)
-    save_model(model_folder, {
-        "model": models["global"],
-        "site_models": models,
-        "bmi_imputer": bmi_imputer,
-        "threshold": threshold,
-        "feature_names": feat_names,
-        "n_features": int(X.shape[1]),
-        "preset": DEFAULT_PRESET,
-    })
-    if verbose:
-        site_list = [k for k in models if k != "global"]
-        print(f"Saved model (preset={DEFAULT_PRESET}, site_models={site_list}). "
-              f"Threshold={threshold:.3f}. Done.")
+    fit_and_save_model(
+        X, y, sites, ages_train, feat_names, model_folder,
+        Xa=np.asarray(Xa_list, dtype=np.float32) if Xa_list else None,
+        alt_names=alt_names,
+        verbose=verbose,
+    )
 
 
 def load_model(model_folder, verbose):
@@ -481,34 +628,35 @@ def load_model(model_folder, verbose):
 
 
 def run_model(model, record, data_folder, verbose):
-    site_models = model.get("site_models")
-    clf = model.get("model") if site_models is None else None
-    threshold = model.get("threshold", 0.5)
-    n_features = model.get("n_features")
+    t0 = time.perf_counter()
     preset = model.get("preset", DEFAULT_PRESET)
-    bmi_imputer = model.get("bmi_imputer")
+    kaiser_alt_preset = model.get("kaiser_alt_preset", KAISER_ALT_PRESET)
+    kaiser_alt_models = model.get("kaiser_alt_models")
     site = record.get(HEADERS["site_id"], "global")
+    pid = record[HEADERS["bids_folder"]]
+    sess = record[HEADERS["session_id"]]
+
     try:
-        feats, _ = extract_all_features(record, data_folder, DEFAULT_CSV_PATH, preset=preset)
+        demo = load_demographics(os.path.join(data_folder, DEMOGRAPHICS_FILE), pid, sess)
+        age = float(load_age(demo))
     except Exception:
-        feats = np.full(n_features or 1, np.nan, dtype=np.float32)
-    if n_features and feats.size != n_features:
-        fixed = np.full(n_features, np.nan, dtype=np.float32)
-        fixed[: min(n_features, feats.size)] = feats[:n_features]
-        feats = fixed
-    X = feats.reshape(1, -1)
-    if bmi_imputer:
-        X = apply_bmi_imputer(X, np.asarray([site]), bmi_imputer)
+        age = float("nan")
+
+    use_alt = kaiser_alt_models is not None and str(site) == "I0006" and kaiser_alt_preset
+    infer_preset = kaiser_alt_preset if use_alt else preset
+    n_features = model.get("n_features")
     try:
-        if site_models:
-            prob = float(predict_site_model(site_models, X, site)[0])
-        else:
-            prob = float(clf.predict_proba(X)[0][1])
+        feats, _ = extract_all_features(
+            record, data_folder, DEFAULT_CSV_PATH, preset=infer_preset)
     except Exception:
-        prob = 0.0
-    if not np.isfinite(prob):
-        prob = 0.0
-    return bool(prob > threshold), prob
+        infer_n = model.get("kaiser_alt_n_features") if use_alt else n_features
+        feats = np.full(infer_n or n_features or 1, np.nan, dtype=np.float32)
+
+    pred, prob = predict_from_features(model, feats, age, str(site))
+    if verbose:
+        infer_sec = time.perf_counter() - t0
+        print(f"  infer_sec={infer_sec:.3f} site={site} age={age:.0f} prob={prob:.3f} pred={int(pred)}")
+    return pred, prob
 
 
 def save_model(model_folder, model_dict):

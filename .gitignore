@@ -93,3 +93,5 @@ credentials.json
 *.csv
 *.sav
 *.sh
+
+*.md
