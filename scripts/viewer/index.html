@@ -57,9 +57,16 @@
   .badge{display:inline-block;padding:3px 10px;border-radius:20px;font-size:12px;font-weight:700;color:#fff;}
   .badge.ci{background:var(--red);} .badge.noci{background:var(--blue);}
   .idx-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;}
-  .idx{background:var(--surface);border:1px solid var(--grid);border-radius:8px;padding:8px 10px;}
+  .idx{background:var(--surface);border:1px solid var(--grid);border-radius:8px;padding:8px 10px;position:relative;}
   .idx .n{font-size:19px;font-weight:700;font-variant-numeric:tabular-nums;}
   .idx .l{font-size:11px;color:var(--muted);}
+  .idx .ref{font-size:10px;color:var(--muted);margin-top:2px;}
+  /* abnormal (out-of-reference-range) values */
+  .idx.abn{background:#fdeff1;border-color:var(--red);}
+  .idx.abn .n{color:var(--red);}
+  .abn-flag{display:inline-block;font-size:9px;font-weight:700;color:#fff;background:var(--red);
+            border-radius:4px;padding:1px 5px;margin-left:6px;vertical-align:middle;letter-spacing:.03em;}
+  .legend .abn-val{color:var(--red);font-weight:700;}
   .stagebar{display:flex;height:34px;border-radius:6px;overflow:hidden;margin-bottom:6px;}
   .stagebar span{display:flex;align-items:center;justify-content:center;color:#fff;
                  font-size:11px;font-weight:700;border-right:2px solid var(--surface);}
@@ -138,6 +145,44 @@ function tipFor(kind, key){
   return hit ? `<b>${clean}</b> — ${hit}` : "";
 }
 function setTip(el, kind, key){ const x = tipFor(kind, key); if(x){ el.setAttribute("data-tip", x); el.classList.add("info"); } }
+
+// ---- reference ranges / abnormal flagging ----
+function refFor(key){
+  if(!GLOSSARY || !GLOSSARY.ranges || key==null) return null;
+  const clean = String(key).replace(/\s*\(.*?\)\s*$/, "").trim();
+  return GLOSSARY.ranges[clean] || GLOSSARY.ranges[key] || null;
+}
+// returns {abnormal:bool, side:'high'|'low'|null, severity:string|null} for a value vs a ref
+function assess(value, ref){
+  if(ref==null || value==null || !isFinite(value)) return {abnormal:false};
+  const [lo, hi] = ref.normal;
+  const dir = ref.direction || "both";
+  let abnormal=false, side=null;
+  if((dir==="high"||dir==="both") && value > hi){ abnormal=true; side="high"; }
+  if((dir==="low" ||dir==="both") && value < lo){ abnormal=true; side="low"; }
+  let severity=null;
+  if(abnormal && ref.severity){
+    for(const [a,b,name] of ref.severity){ if(value>=a && value<b){ severity=name; break; } }
+  }
+  return {abnormal, side, severity};
+}
+// build a tooltip combining the definition + normal range (+ abnormal note)
+function rangeTip(defKind, key, value){
+  const parts = [];
+  const def = tipFor(defKind, key); if(def) parts.push(def);
+  const ref = refFor(key);
+  if(ref){
+    const [lo,hi] = ref.normal;
+    parts.push(`<b>Normal:</b> ${lo}–${hi} ${ref.unit||''}`);
+    const a = assess(value, ref);
+    if(a.abnormal){
+      const arrow = a.side==="high" ? "above" : "below";
+      const sev = a.severity ? ` (${a.severity})` : "";
+      parts.push(`<span style="color:#ff9ba6"><b>Abnormal${sev}</b> — ${arrow} normal. ${ref.abnormal||''}</span>`);
+    }
+  }
+  return parts.join("<br>");
+}
 
 // ---- patient list ----
 async function loadPatients(){
@@ -218,8 +263,13 @@ function caisrCard(d){
       sp.textContent = v>=5 ? `${s} ${v}%` : ""; bar.appendChild(sp); }
     c.appendChild(bar);
     const lg = div("legend");
-    lg.innerHTML = order.map(s=>{ const x=tipFor('stage',s); const attr=x?` class="info" data-tip="${x.replace(/"/g,'&quot;')}"`:"";
-      return `<span${attr}><span class="dot" style="background:${colors[s]}"></span>${s} <b>${d.stage_pct[s]??0}%</b></span>`; }).join("");
+    lg.innerHTML = order.map(s=>{ const v = d.stage_pct[s]??0;
+      const tip = rangeTip('stage', s, Number(v));
+      const attr = tip ? ` class="info" data-tip="${tip.replace(/"/g,'&quot;')}"` : "";
+      const a = assess(Number(v), refFor(s));
+      const valcls = a.abnormal ? ' class="abn-val"' : "";
+      const flag = a.abnormal ? ` <span class="abn-flag">${a.side==='high'?'HIGH':'LOW'}</span>` : "";
+      return `<span${attr}><span class="dot" style="background:${colors[s]}"></span>${s} <b${valcls}>${v}%</b>${flag}</span>`; }).join("");
     c.appendChild(lg);
   }
   // hypnogram
@@ -228,8 +278,15 @@ function caisrCard(d){
   const g = div("idx-grid"); g.style.marginTop = "12px";
   for(const [k,v] of Object.entries(d.indices)){
     const it = div("idx");
-    setTip(it, 'index', k);
-    it.innerHTML = `<div class="n">${v==null?"—":v}</div><div class="l">${k}</div>`;
+    const val = (v==null||v==="")?null:Number(v);
+    const ref = refFor(k);
+    const a = assess(val, ref);
+    const tip = rangeTip('index', k, val);
+    if(tip){ it.setAttribute("data-tip", tip); it.classList.add("info"); }
+    let refLine = ref ? `<div class="ref">normal ${ref.normal[0]}–${ref.normal[1]} ${ref.unit||''}</div>` : "";
+    let flag = a.abnormal ? `<span class="abn-flag">${a.severity?a.severity.toUpperCase():'ABNORMAL'}</span>` : "";
+    if(a.abnormal) it.classList.add("abn");
+    it.innerHTML = `<div class="n">${v==null?"—":v}</div><div class="l">${k}${flag}</div>${refLine}`;
     g.appendChild(it);
   }
   c.appendChild(g);

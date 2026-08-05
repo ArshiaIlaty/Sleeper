@@ -9,6 +9,11 @@ An interactive, single-page web app to browse the dataset one patient at a time:
   demographic field shows a plain-language tooltip on hover (or keyboard focus).
   Definitions live in `glossary.py` (one source of truth), served at
   `/api/glossary`.
+- **Normal ranges + abnormal flagging** — event indices and stage percentages
+  are compared against adult AASM/clinical reference ranges (also in
+  `glossary.py`). Out-of-range values turn **red** with a severity flag
+  (e.g. AHI 30+ = SEVERE), the normal range is shown under each tile, and the
+  tooltip explains what the abnormal value means.
 - **Edwards branding** — the logo (`edwards_logo.png`, served from `/static/`)
   sits in the header.
 

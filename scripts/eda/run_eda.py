@@ -23,6 +23,13 @@ import stats_sleep
 import stats_quality
 import report
 
+try:
+    import stats_transitions
+    import dump_transitions
+except Exception:  # optional; only needed when computing dynamics
+    stats_transitions = None
+    dump_transitions = None
+
 
 def _log(msg):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", file=sys.stderr, flush=True)
@@ -34,6 +41,7 @@ def main():
                     help="max EDF files per site (smoke test)")
     ap.add_argument("--skip-biosignals", action="store_true")
     ap.add_argument("--skip-sleep", action="store_true")
+    ap.add_argument("--skip-transitions", action="store_true")
     ap.add_argument("--skip-quality", action="store_true")
     ap.add_argument("--expert-sample", type=int, default=60,
                     help="per-site CAISR-vs-expert agreement sample size")
@@ -65,11 +73,24 @@ def main():
                                            progress=_log)
         _log(f"   done in {time.time()-t:.1f}s")
 
+    if not args.skip_transitions and stats_transitions is not None:
+        _log("== stage-transition dynamics & fragmentation ==")
+        t = time.time()
+        labels = dump_transitions._label_lookup() if dump_transitions else None
+        results["transitions"] = stats_transitions.run(limit_per_site=args.limit,
+                                                        label_lookup=labels,
+                                                        progress=_log)
+        _log(f"   done in {time.time()-t:.1f}s")
+
     if not args.skip_quality:
         _log("== data quality & coverage ==")
         t = time.time()
         results["quality"] = stats_quality.run(progress=_log)
         _log(f"   done in {time.time()-t:.1f}s")
+
+    # Feature significance runs off the per-recording CSVs (written separately by
+    # dump_per_recording.py / dump_transitions.py), so it's computed at report
+    # time; see the README for the full-pipeline order.
 
     # ---- write JSON ----
     json_path = os.path.join(out_dir, "dataset_stats.json")

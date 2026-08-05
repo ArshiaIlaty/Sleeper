@@ -106,6 +106,37 @@ imperfect labels. Key terms:
   night's stage pattern is; high transitions = fragmented sleep.
 """
 
+_NOTE_TRANSITIONS = """
+**Sleep-stage dynamics.** Beyond *how much* of each stage a patient gets, *how
+the night moves between stages* carries signal. The **transition matrix** below
+reads row → column: each cell is the probability that an epoch in the row's
+stage is immediately followed by the column's stage (rows sum to 100%). A high
+diagonal = stable, consolidated sleep; large off-diagonal flow into Wake =
+fragmentation. **Fragmentation metrics** count the disruptions: *awakenings*
+(sleep → Wake), *brief wake intrusions* and *single-epoch spikes* (a stage
+appearing for just one 30 s epoch — rapid flickering), the *stage-shift index*
+(all stage changes per hour of sleep), and *bout* counts/durations (how long
+unbroken runs of sleep or wake last). More, shorter bouts = more fragmented.
+"""
+
+_NOTE_SIGNIFICANCE = """
+**Which features actually matter?** For every feature we test whether it differs
+between the impaired (CI) and non-impaired groups more than chance allows:
+
+- **Numeric** features (age, sleep metrics, transition rates) — *Welch's
+  t-test* (means, unequal variances). *Cohen's d* is the standardized effect
+  size (|d| ≈ 0.2 small, 0.5 medium, 0.8 large). A rank-based *Mann–Whitney*
+  p is also shown, since several metrics are skewed.
+- **Categorical** features (sex, race, site) — *chi-square* test of
+  independence; *Cramér's V* is the effect size.
+
+Because ~50 features are tested at once, raw p-values would throw false
+positives, so we report **FDR q-values** (Benjamini–Hochberg); a feature is
+called **significant at q < 0.05**. Note *age* has by far the largest effect —
+which is exactly why the Challenge conditions its scoring on age; a feature
+being significant here does not mean it survives age adjustment.
+"""
+
 _NOTE_QUALITY = """
 **Data quality & coverage.** Not every recording has every modality. The three
 label sources are the raw *physio* EDF, the *CAISR* automated annotations, and
@@ -160,13 +191,17 @@ def render(r):
         "followed by the measured numbers. Sections: **1** demographics & the "
         "prevalence/age structure the scoring metric targets; **2** the raw "
         "biosignals and montage variability; **3** sleep architecture from CAISR "
-        "annotations; **4** data quality and cross-modality coverage. A "
-        "companion `DATASET_TREE.md` shows the file layout with concrete "
-        "samples of each data type.") + "\n")
+        "annotations; **4** stage-transition dynamics & fragmentation; **5** "
+        "which features differ significantly between impaired and non-impaired "
+        "patients; **6** data quality and cross-modality coverage. A companion "
+        "`DATASET_TREE.md` shows the file layout with concrete samples of each "
+        "data type.") + "\n")
 
     _demographics(L, r.get("demographics", {}))
     _biosignals(L, r.get("biosignals", {}))
     _sleep(L, r.get("sleep", {}))
+    _transitions(L, r.get("transitions", {}))
+    _significance(L, r.get("significance", {}))
     _quality(L, r.get("quality", {}))
     return "\n".join(L) + "\n"
 
@@ -349,11 +384,103 @@ def _sleep(L, s):
         L.append("| " + " | ".join(cells) + " |")
 
 
+# ------------------------------------------------------------------ transitions
+def _matrix_block(L, mat, order, title):
+    """Render a transition-probability matrix (list of rows) as a % table."""
+    L.append(f"\n**{title}** — rows sum to 100%; cell = P(row stage → column stage):\n")
+    L.append("| from \\ to | " + " | ".join(order) + " |")
+    L.append("|---" * (len(order) + 1) + "|")
+    for i, row in enumerate(mat):
+        cells = " | ".join(f"{v*100:.1f}" for v in row)
+        L.append(f"| **{order[i]}** | {cells} |")
+
+
+def _transitions(L, t):
+    if not t or "error" in t:
+        return
+    L.append("\n## 4. Sleep-Stage Dynamics & Fragmentation\n")
+    L.append(_note(_NOTE_TRANSITIONS) + "\n")
+    L.append(f"- **Recordings analysed:** {t.get('n_ok','?')} (errors: {t.get('n_errors',0)})")
+
+    ma = t.get("transition_matrix_all")
+    if ma:
+        order = ma["stage_order"]
+        _matrix_block(L, ma["mean_matrix"], order, "Cohort-mean transition matrix")
+        ci = t.get("transition_matrix_ci")
+        no = t.get("transition_matrix_noci")
+        if ci and no:
+            import numpy as _np
+            diff = (_np.array(ci["mean_matrix"]) - _np.array(no["mean_matrix"]))
+            L.append(f"\n**CI − non-CI difference** (percentage points; how the {ci['n_recordings']} "
+                     f"impaired patients' transitions differ from the {no['n_recordings']} others):\n")
+            L.append("| from \\ to | " + " | ".join(order) + " |")
+            L.append("|---" * (len(order) + 1) + "|")
+            for i in range(len(order)):
+                cells = " | ".join(f"{diff[i,j]*100:+.1f}" for j in range(len(order)))
+                L.append(f"| **{order[i]}** | {cells} |")
+            L.append("\n_Reading it: impaired patients show a less stable N3 (deep sleep slips back "
+                     "to N2) and less stable REM, with more time returning to Wake — a mechanistic "
+                     "view of the fragmentation seen in the summary metrics._")
+
+    frag = t.get("pooled_fragmentation", {})
+    if frag:
+        L.append("\n### Fragmentation & bout structure (pooled)\n")
+        L.append("| Metric | n | mean | std | median | p5–p95 | missing |")
+        L.append("|---|--:|--:|--:|--:|:-:|--:|")
+        frag_labels = [
+            ("n_awakenings", "Awakenings (count)", 0),
+            ("awakenings_per_hr_sleep", "Awakenings /h sleep", 2),
+            ("brief_wake_intrusions", "Brief wake intrusions", 0),
+            ("single_epoch_spikes", "Single-epoch stage spikes", 0),
+            ("spikes_per_hr_sleep", "Stage spikes /h sleep", 2),
+            ("stage_shift_index", "Stage-shift index /h sleep", 2),
+            ("n_wake_bouts", "Wake bouts (count)", 0),
+            ("n_sleep_bouts", "Sleep bouts (count)", 0),
+            ("mean_sleep_bout_min", "Mean sleep bout (min)", 2),
+            ("mean_wake_bout_min", "Mean wake bout (min)", 2),
+            ("n_rem_periods", "REM periods (count)", 0),
+        ]
+        for key, name, nd in frag_labels:
+            L.append(_numrow(name, frag.get(key), nd))
+
+
+# ------------------------------------------------------------------ significance
+def _significance(L, sig):
+    if not sig or not sig.get("results"):
+        return
+    L.append("\n## 5. Feature Significance (CI vs non-CI)\n")
+    L.append(_note(_NOTE_SIGNIFICANCE) + "\n")
+    L.append(f"- **Features tested:** {sig['n_features']}  |  "
+             f"**significant at FDR q<0.05:** {sig['n_significant']}\n")
+
+    L.append("| Feature | Test | mean CI | mean non-CI | stat | p | q (FDR) | effect | sig |")
+    L.append("|---|---|--:|--:|--:|--:|--:|--:|:-:|")
+    seen = set()
+    for r in sig["results"]:
+        # dedup identical-value aliases (e.g. plmi == periodic_limb_idx)
+        sig_key = (r["kind"], r["mean_ci"], r["mean_noci"], round(r["p"], 12))
+        if sig_key in seen:
+            continue
+        seen.add(sig_key)
+        mci = _fmt(r["mean_ci"], 2) if r["mean_ci"] is not None else "—"
+        mno = _fmt(r["mean_noci"], 2) if r["mean_noci"] is not None else "—"
+        p = f"{r['p']:.2g}"
+        q = f"{r['q_fdr']:.2g}" if r.get("q_fdr") is not None else "—"
+        eff = f"{r['effect_name']} {r['effect']:+.2f}" if r["effect"] is not None else "—"
+        star = "**✓**" if r["significant"] else ""
+        L.append(f"| {r['feature']} | {r['test']} | {mci} | {mno} | {_fmt(r['stat'],2)} | "
+                 f"{p} | {q} | {eff} | {star} |")
+
+    L.append("\n_Effect size: Cohen d for numeric (|0.2| small · |0.5| medium · |0.8| large), "
+             "Cramér V for categorical. Age's large d≈1.1 is the confounder the age-conditioned "
+             "metric neutralises — significance here is descriptive, not age-adjusted._")
+
+
 # ------------------------------------------------------------------ quality
 def _quality(L, q):
     if not q:
         return
-    L.append("\n## 4. Data Quality & Cross-Modality Coverage\n")
+    L.append("\n## 6. Data Quality & Cross-Modality Coverage\n")
     L.append(_note(_NOTE_QUALITY) + "\n")
 
     sr = q.get("short_recordings", {})

@@ -52,6 +52,14 @@ Patients with cognitive impairment trend toward lower sleep efficiency and reduc
 
 ![Sleep metrics by CI status](figures/fig4_ci_vs_noci.png)
 
+Beyond stage *proportions*, stage *dynamics* carry signal. The epoch-to-epoch transition matrix shows impaired patients have a markedly less stable N3 (−5.4 pp lower N3→N3 self-transition, redistributed to N2) and less stable REM (−4.8 pp) — a mechanistic view of their fragmentation:
+
+![Stage-transition matrix and CI−nonCI difference](figures/fig7_transition_matrix.png)
+
+To gauge which features carry univariate signal, we tested every feature against the label (Welch's *t* for numeric, χ² for categorical; Benjamini–Hochberg FDR). **14 of 48 are significant at q<0.05**: age dominates (Cohen's *d*=1.08 — why it must be discounted), followed by periodic limb movements, reduced REM, elevated WASO and wake fraction, lower sleep efficiency and stage entropy, fewer REM periods, and reduced N3. Notably **AHI is *not* significant** (*d*=0.19, q>0.3) — the discriminative signal lies in sleep architecture and continuity, not respiratory event load.
+
+![Feature effect size vs cognitive impairment](figures/fig8_feature_significance.png)
+
 ### 2.3 Feature extraction
 We avoid raw-waveform EEG features; an ablation (§3) showed EEG/EOG/chin channels gave no cross-site benefit while adding montage-dependent fragility. We derive three interpretable blocks:
 

@@ -112,6 +112,21 @@ Sleep architecture is summarized in Fig.~\ref{fig:stages}; patients with
 cognitive impairment show modestly lower sleep efficiency and reduced deep/REM
 sleep (Fig.~\ref{fig:civnoci}).
 
+Beyond stage \emph{proportions}, stage \emph{dynamics} carry signal. The
+epoch-to-epoch transition matrix (Fig.~\ref{fig:trans}) shows that impaired
+patients have a markedly less stable N3 (a $-5.4$\,pp lower N3$\rightarrow$N3
+self-transition, redistributed to N2) and less stable REM ($-4.8$\,pp), i.e.\ a
+mechanistic view of their fragmentation. To gauge which features carry
+univariate signal, we tested every feature against the label (Welch's $t$ for
+numeric, $\chi^2$ for categorical; Benjamini--Hochberg FDR). Fourteen of 48 are
+significant at $q<0.05$ (Fig.~\ref{fig:sig}): age dominates
+(Cohen's $d\!=\!1.08$)---confirming why it must be discounted---followed by
+periodic limb movements, reduced REM, elevated WASO and wake fraction, lower
+sleep efficiency and stage entropy, fewer REM periods, and reduced N3. Notably
+AHI is \emph{not} significant ($d\!=\!0.19$, $q\!>\!0.3$), so the discriminative
+signal lies in sleep architecture and continuity rather than respiratory event
+load.
+
 \begin{table}[t]
 \centering
 \caption{Training cohort by site. Prevalence with 95\% Wilson CI.}
@@ -158,6 +173,24 @@ Raw-signal montage fragility motivates annotation-level features.}
 \caption{Sleep metrics stratified by cognitive-impairment status. CI cases trend
 toward lower efficiency and less deep/REM sleep.}
 \label{fig:civnoci}
+\end{figure}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{figures/fig7_transition_matrix.pdf}
+\caption{Cohort-mean sleep-stage transition probabilities (left) and the
+CI\,$-$\,non-CI difference in percentage points (right). Impaired patients show a
+destabilized N3 (deep sleep slipping back to N2) and less stable REM.}
+\label{fig:trans}
+\end{figure}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\linewidth]{figures/fig8_feature_significance.pdf}
+\caption{Univariate effect size (Cohen's $d$) of each feature vs.\ cognitive
+impairment; red = significant at FDR $q<0.05$. Age dominates; AHI is not
+significant.}
+\label{fig:sig}
 \end{figure}
 
 \subsection{Feature extraction}

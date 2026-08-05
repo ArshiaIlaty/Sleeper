@@ -9,6 +9,56 @@ Legend: ✅ done & verified · 🔬 verified against data · 📌 needs follow-u
 
 ---
 
+## 2026-08-05 (latest) — Stage dynamics, feature significance, abnormal-value flagging
+
+Added detailed sleep-dynamics statistics, a formal significance analysis, and
+clinical reference ranges in the viewer.
+
+### Stage-transition + fragmentation stats — `scripts/eda/stats_transitions.py`
+Per recording: the full 5×5 stage-transition probability matrix P(X→Y), plus
+fragmentation ("spikes") — awakenings, brief single-epoch wake intrusions,
+single-epoch stage spikes, stage-shift index, wake/sleep bout counts+durations,
+REM-period count, and named directed transition rates. Run on pdmle via
+`dump_transitions.py` → `eda/per_recording_dynamics.csv` (1090 rows, 0 errors)
++ `eda/transitions.json` (cohort-mean + CI/non-CI matrices).
+- 🔬 **Key finding:** impaired patients have a **destabilized N3** (N3→N3 −5.4pp,
+  N3→N2 +6.0pp) and **less stable REM** (REM→REM −4.8pp) — a mechanistic view of
+  their fragmentation. Cohort matrix diagonal is high (N2→N2 92%, REM→REM 90%).
+
+### Feature significance — `scripts/eda/stats_significance.py`
+Per user request ("c or s statistics"): **chi-square** for categorical features,
+**Welch's t-test** (+ Mann–Whitney robustness) for numeric, each vs the CI label,
+with **Cohen d / Cramér V** effect sizes and **Benjamini–Hochberg FDR**. Runs
+locally off the per-recording CSVs (scipy). Output `eda/feature_significance.csv`.
+- 🔬 **14 of 48 features significant at q<0.05.** Ranked by effect: age
+  (d=1.08, the confounder) ≫ periodic-limb-movement index, ↓REM, ↑WASO/wake,
+  ↓efficiency/entropy, fewer REM periods, ↓N3, REM→Wake rate. **AHI is NOT
+  significant** (d=0.19) — discriminative signal is in architecture/continuity,
+  not respiratory load. (`time_to_last_visit` is significant but reflects outcome
+  timing — treat with caution, not a clean predictor.)
+
+### Viewer — normal ranges + red abnormal flagging (task per user request)
+`glossary.py` now carries adult **AASM/clinical reference ranges** for every
+event index and stage %. The viewer shows the normal range under each tile,
+turns out-of-range values **red** with a severity flag (e.g. AHI 30+ = SEVERE,
+N3 <10% = LOW), and the tooltip explains what the abnormal value means. Verified
+on pdmle against real patients (e.g. one with AHI 28 moderate, N3 1.4% low,
+Wake 26% high — all flagged correctly).
+
+### Figures + paper + report integration
+- Two new figures (`make_figures.py`): **fig7** transition-probability heatmap
+  (cohort + CI−nonCI diff) and **fig8** effect-size ranking (red = significant).
+- Report gained **§4 Sleep-Stage Dynamics & Fragmentation** and **§5 Feature
+  Significance** with explanations; §Quality renumbered to §6. Regenerated
+  `eda/DATASET_REPORT.md` (19K → 27.5K chars).
+- Paper (`cinc2026_sdg.tex` + `.md`): new dynamics/significance paragraph + both
+  figures; all LaTeX labels/refs balance.
+- `run_eda.py` now runs transitions inline (`--skip-transitions` to opt out);
+  significance computed at report time off the CSVs. eda README documents the
+  full pipeline order.
+
+---
+
 ## 2026-08-05 (later) — Dataset tree, viewer tooltips + logo, report explanations
 
 Follow-up on the same day to make everything self-explanatory and better

@@ -221,6 +221,104 @@ def fig_completeness(stats):
     _save(fig, "fig6_data_completeness")
 
 
+def fig_transition_matrix(trans):
+    """fig7: cohort-mean stage-transition matrix as a blue-ramp heatmap, with the
+    CI−nonCI difference alongside (diverging) so the mechanism is visible."""
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import LinearSegmentedColormap, TwoSlopeNorm
+    ma = trans.get("transition_matrix_all")
+    if not ma:
+        return
+    order = ma["stage_order"]
+    M = np.array(ma["mean_matrix"]) * 100.0
+    ci = trans.get("transition_matrix_ci"); no = trans.get("transition_matrix_noci")
+    have_diff = bool(ci and no)
+    ncol = 2 if have_diff else 1
+    fig, axes = plt.subplots(1, ncol, figsize=(5.0 * ncol, 4.2))
+    axes = np.atleast_1d(axes)
+
+    blue_cmap = LinearSegmentedColormap.from_list("seqblue", fs.SEQ_BLUE)
+    ax = axes[0]
+    ax.imshow(M, cmap=blue_cmap, vmin=0, vmax=100, aspect="equal")
+    for i in range(len(order)):
+        for j in range(len(order)):
+            v = M[i, j]
+            ax.text(j, i, f"{v:.0f}", ha="center", va="center",
+                    color="white" if v > 45 else INK, fontsize=10,
+                    fontweight="bold" if i == j else "normal")
+    ax.set_xticks(range(len(order))); ax.set_xticklabels(order)
+    ax.set_yticks(range(len(order))); ax.set_yticklabels(order)
+    ax.set_xlabel("to stage"); ax.set_ylabel("from stage")
+    ax.tick_params(length=0)
+    ax.set_title("Stage-transition probability (%)", color=INK, loc="left", pad=10)
+    for s in ax.spines.values():
+        s.set_visible(False)
+
+    if have_diff:
+        D = (np.array(ci["mean_matrix"]) - np.array(no["mean_matrix"])) * 100.0
+        ax2 = axes[1]
+        div = LinearSegmentedColormap.from_list("div", [BLUE, "#eef2f4", RED])
+        lim = max(1e-6, float(np.abs(D).max()))
+        norm = TwoSlopeNorm(vmin=-lim, vcenter=0, vmax=lim)
+        ax2.imshow(D, cmap=div, norm=norm, aspect="equal")
+        for i in range(len(order)):
+            for j in range(len(order)):
+                ax2.text(j, i, f"{D[i,j]:+.1f}", ha="center", va="center",
+                         color=INK, fontsize=9)
+        ax2.set_xticks(range(len(order))); ax2.set_xticklabels(order)
+        ax2.set_yticks(range(len(order))); ax2.set_yticklabels(order)
+        ax2.set_xlabel("to stage"); ax2.set_ylabel("from stage")
+        ax2.tick_params(length=0)
+        ax2.set_title("CI − non-CI difference (pp)", color=INK, loc="left", pad=10)
+        for s in ax2.spines.values():
+            s.set_visible(False)
+    fig.tight_layout()
+    _save(fig, "fig7_transition_matrix")
+
+
+def fig_significance(sig):
+    """fig8: effect-size ranking (Cohen d) with significance colored red."""
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Patch
+    results = sig.get("results", [])
+    seen, items = set(), []
+    for r in results:
+        if r["effect"] is None:
+            continue
+        key = (r["mean_ci"], r["mean_noci"], round(r["p"], 12))
+        if key in seen:
+            continue
+        seen.add(key)
+        items.append(r)
+    items = sorted(items, key=lambda r: abs(r["effect"]), reverse=True)[:16]
+    items = items[::-1]  # smallest at bottom for barh
+    labels = [r["feature"] for r in items]
+    effs = [r["effect"] for r in items]
+    colors = [(RED if r["significant"] else "#c9ccce") for r in items]
+
+    fig, ax = plt.subplots(figsize=(7.2, 5.2))
+    y = np.arange(len(labels))
+    ax.barh(y, effs, height=0.66, color=colors, zorder=3)
+    span = max(abs(min(effs)), abs(max(effs)))
+    off = span * 0.03
+    for yi, r in zip(y, items):
+        e = r["effect"]
+        ax.text(e + (off if e >= 0 else -off), yi, f"{e:+.2f}",
+                va="center", ha="left" if e >= 0 else "right",
+                color=INK, fontsize=9, fontweight="bold")
+    ax.axvline(0, color=fs.AXIS, lw=0.8, zorder=2)
+    # pad x-limits so value labels never clip the frame
+    ax.set_xlim(min(effs) - span * 0.22, max(effs) + span * 0.22)
+    ax.set_yticks(y); ax.set_yticklabels(labels, fontsize=9.5)
+    ax.set_xlabel("Effect size (Cohen d, + = higher in CI)")
+    ax.grid(axis="y", visible=False)
+    ax.set_title("Feature effect size vs cognitive impairment", color=INK, loc="left", pad=10)
+    ax.legend(handles=[Patch(color=RED, label="significant (FDR q<0.05)"),
+                       Patch(color="#c9ccce", label="not significant")],
+              loc="lower right", frameon=False, fontsize=9)
+    _save(fig, "fig8_feature_significance")
+
+
 def main():
     fs.apply_style()
     rows = fs.load_rows(os.path.join(EDA, "per_recording.csv"))
@@ -233,6 +331,18 @@ def main():
     fig_ci_vs_noci(rows)
     fig_montage(stats)
     fig_completeness(stats)
+    # transition + significance figures (need transitions.json / significance)
+    tpath = os.path.join(EDA, "transitions.json")
+    if os.path.exists(tpath):
+        with open(tpath) as fh:
+            fig_transition_matrix(json.load(fh))
+    try:
+        import stats_significance
+        sig = stats_significance.run(os.path.join(EDA, "per_recording.csv"),
+                                     os.path.join(EDA, "per_recording_dynamics.csv"))
+        fig_significance(sig)
+    except Exception as e:
+        print(f"  (skipped significance figure: {e})")
     print("done.")
 
 

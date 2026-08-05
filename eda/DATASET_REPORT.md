@@ -3,7 +3,7 @@
 _Data root: `/data-temp/shared-physionet26-dataset/extracted`_  
 Sites: `S0001`=BIDMC, `I0002`=Emory, `I0006`=Kaiser
 
-> **How to read this report.** This is a full statistical profile of the Challenge 2026 dataset. Each section begins with a short explanation (in a quote block like this one) of the terms and why they matter, followed by the measured numbers. Sections: **1** demographics & the prevalence/age structure the scoring metric targets; **2** the raw biosignals and montage variability; **3** sleep architecture from CAISR annotations; **4** data quality and cross-modality coverage. A companion `DATASET_TREE.md` shows the file layout with concrete samples of each data type.
+> **How to read this report.** This is a full statistical profile of the Challenge 2026 dataset. Each section begins with a short explanation (in a quote block like this one) of the terms and why they matter, followed by the measured numbers. Sections: **1** demographics & the prevalence/age structure the scoring metric targets; **2** the raw biosignals and montage variability; **3** sleep architecture from CAISR annotations; **4** stage-transition dynamics & fragmentation; **5** which features differ significantly between impaired and non-impaired patients; **6** data quality and cross-modality coverage. A companion `DATASET_TREE.md` shows the file layout with concrete samples of each data type.
 
 
 ## 1. Cohort & Demographics
@@ -341,7 +341,132 @@ Sites: `S0001`=BIDMC, `I0002`=Emory, `I0006`=Kaiser
 | I0006 (Kaiser) | 7.0 | 312.5 | 74.9 | 6.0 | 8.5 | 40.1 | 30.7 | 0.7 |
 | S0001 (BIDMC) | 7.7 | 353.5 | 77.4 | 9.6 | 11.8 | 43.4 | 40.1 | 0.6 |
 
-## 4. Data Quality & Cross-Modality Coverage
+## 4. Sleep-Stage Dynamics & Fragmentation
+
+> **Sleep-stage dynamics.** Beyond *how much* of each stage a patient gets, *how
+> the night moves between stages* carries signal. The **transition matrix** below
+> reads row → column: each cell is the probability that an epoch in the row's
+> stage is immediately followed by the column's stage (rows sum to 100%). A high
+> diagonal = stable, consolidated sleep; large off-diagonal flow into Wake =
+> fragmentation. **Fragmentation metrics** count the disruptions: *awakenings*
+> (sleep → Wake), *brief wake intrusions* and *single-epoch spikes* (a stage
+> appearing for just one 30 s epoch — rapid flickering), the *stage-shift index*
+> (all stage changes per hour of sleep), and *bout* counts/durations (how long
+> unbroken runs of sleep or wake last). More, shorter bouts = more fragmented.
+
+- **Recordings analysed:** 1090 (errors: 0)
+
+**Cohort-mean transition matrix** — rows sum to 100%; cell = P(row stage → column stage):
+
+| from \ to | Wake | N1 | N2 | N3 | REM |
+|---|---|---|---|---|---|
+| **Wake** | 85.7 | 12.3 | 1.5 | 0.1 | 0.4 |
+| **N1** | 15.7 | 52.3 | 29.3 | 0.0 | 2.8 |
+| **N2** | 3.2 | 1.4 | 92.4 | 2.0 | 1.0 |
+| **N3** | 1.2 | 0.0 | 14.3 | 84.3 | 0.1 |
+| **REM** | 4.4 | 2.5 | 3.1 | 0.0 | 90.1 |
+
+**CI − non-CI difference** (percentage points; how the 84 impaired patients' transitions differ from the 1006 others):
+
+| from \ to | Wake | N1 | N2 | N3 | REM |
+|---|---|---|---|---|---|
+| **Wake** | +3.5 | -3.6 | +0.3 | -0.1 | -0.1 |
+| **N1** | +2.0 | -3.7 | +2.4 | +0.0 | -0.7 |
+| **N2** | +0.3 | +0.1 | -0.3 | +0.1 | -0.2 |
+| **N3** | -0.5 | -0.1 | +6.0 | -5.4 | -0.1 |
+| **REM** | +1.6 | +1.4 | +1.7 | +0.0 | -4.8 |
+
+_Reading it: impaired patients show a less stable N3 (deep sleep slips back to N2) and less stable REM, with more time returning to Wake — a mechanistic view of the fragmentation seen in the summary metrics._
+
+### Fragmentation & bout structure (pooled)
+
+| Metric | n | mean | std | median | p5–p95 | missing |
+|---|--:|--:|--:|--:|:-:|--:|
+| Awakenings (count) | 1090 | 26 | 13 | 24 | 10–49 | 0.0% |
+| Awakenings /h sleep | 1087 | 5.26 | 4.34 | 4.21 | 1.80–12.03 | 0.3% |
+| Brief wake intrusions | 1090 | 12 | 7 | 11 | 3–26 | 0.0% |
+| Single-epoch stage spikes | 1090 | 22 | 12 | 21 | 8–43 | 0.0% |
+| Stage spikes /h sleep | 1087 | 4.35 | 3.18 | 3.64 | 1.45–9.99 | 0.3% |
+| Stage-shift index /h sleep | 1087 | 19.15 | 10.99 | 17.10 | 9.91–35.09 | 0.3% |
+| Wake bouts (count) | 1090 | 27 | 13 | 25 | 11–50 | 0.0% |
+| Sleep bouts (count) | 1090 | 26 | 13 | 24 | 11–49 | 0.0% |
+| Mean sleep bout (min) | 1087 | 16.10 | 15.89 | 14.07 | 4.99–32.11 | 0.3% |
+| Mean wake bout (min) | 1090 | 5.84 | 20.66 | 3.87 | 1.63–10.79 | 0.0% |
+| REM periods (count) | 1090 | 6 | 4 | 6 | 1–13 | 0.0% |
+
+## 5. Feature Significance (CI vs non-CI)
+
+> **Which features actually matter?** For every feature we test whether it differs
+> between the impaired (CI) and non-impaired groups more than chance allows:
+>
+> - **Numeric** features (age, sleep metrics, transition rates) — *Welch's
+>   t-test* (means, unequal variances). *Cohen's d* is the standardized effect
+>   size (|d| ≈ 0.2 small, 0.5 medium, 0.8 large). A rank-based *Mann–Whitney*
+>   p is also shown, since several metrics are skewed.
+> - **Categorical** features (sex, race, site) — *chi-square* test of
+>   independence; *Cramér's V* is the effect size.
+>
+> Because ~50 features are tested at once, raw p-values would throw false
+> positives, so we report **FDR q-values** (Benjamini–Hochberg); a feature is
+> called **significant at q < 0.05**. Note *age* has by far the largest effect —
+> which is exactly why the Challenge conditions its scoring on age; a feature
+> being significant here does not mean it survives age adjustment.
+
+- **Features tested:** 48  |  **significant at FDR q<0.05:** 14
+
+| Feature | Test | mean CI | mean non-CI | stat | p | q (FDR) | effect | sig |
+|---|---|--:|--:|--:|--:|--:|--:|:-:|
+| age | Welch t | 70.14 | 61.33 | 9.08 | 1.4e-14 | 6.8e-13 | Cohen d +1.08 | **✓** |
+| time_to_last_visit | Welch t | 2669.05 | 3628.86 | -7.28 | 9.3e-11 | 2.2e-09 | Cohen d -0.88 | **✓** |
+| plmi | Welch t | 127.20 | 85.18 | 3.81 | 0.00025 | 0.0024 | Cohen d +0.56 | **✓** |
+| pct_REM | Welch t | 8.55 | 11.79 | -4.32 | 3.7e-05 | 0.0006 | Cohen d -0.48 | **✓** |
+| waso_min | Welch t | 108.20 | 83.18 | 3.43 | 0.00091 | 0.0044 | Cohen d +0.45 | **✓** |
+| pct_Wake | Welch t | 31.63 | 25.39 | 3.61 | 0.0005 | 0.003 | Cohen d +0.43 | **✓** |
+| tst_min | Welch t | 302.14 | 334.95 | -3.65 | 0.00042 | 0.003 | Cohen d -0.42 | **✓** |
+| sleep_efficiency_pct | Welch t | 67.86 | 74.05 | -3.60 | 0.0005 | 0.003 | Cohen d -0.42 | **✓** |
+| stage_entropy | Welch t | 0.75 | 0.79 | -3.48 | 0.00076 | 0.0041 | Cohen d -0.41 | **✓** |
+| bmi | Welch t | 30.66 | 33.39 | -2.51 | 0.014 | 0.047 | Cohen d -0.34 | **✓** |
+| n_rem_periods | Welch t | 5.13 | 6.42 | -3.20 | 0.0019 | 0.008 | Cohen d -0.33 | **✓** |
+| pct_N3 | Welch t | 7.47 | 9.31 | -2.74 | 0.0072 | 0.027 | Cohen d -0.30 | **✓** |
+| trans_REM_to_Wake_per_hr | Welch t | 0.40 | 0.53 | -3.16 | 0.002 | 0.008 | Cohen d -0.27 | **✓** |
+| isolated_limb_idx | Welch t | 103.59 | 67.76 | 2.41 | 0.018 | 0.057 | Cohen d +0.31 |  |
+| pct_N1 | Welch t | 6.74 | 7.67 | -1.94 | 0.056 | 0.15 | Cohen d -0.21 |  |
+| arousal_index | Welch t | 36.01 | 40.01 | -1.63 | 0.11 | 0.27 | Cohen d -0.21 |  |
+| trans_N3_to_N2_per_hr | Welch t | 1.44 | 1.26 | 1.49 | 0.14 | 0.29 | Cohen d +0.21 |  |
+| brief_wake_intrusions | Welch t | 10.60 | 12.12 | -2.02 | 0.046 | 0.13 | Cohen d -0.20 |  |
+| ahi | Welch t | 52.79 | 47.45 | 1.21 | 0.23 | 0.41 | Cohen d +0.19 |  |
+| rem_latency_min | Welch t | 121.35 | 136.68 | -1.37 | 0.17 | 0.33 | Cohen d -0.17 |  |
+| spikes_per_hr_sleep | Welch t | 4.81 | 4.31 | 1.51 | 0.13 | 0.29 | Cohen d +0.16 |  |
+| resp_hypopnea_idx | Welch t | 40.15 | 36.82 | 0.84 | 0.41 | 0.57 | Cohen d +0.15 |  |
+| resp_obstructive_apnea_idx | Welch t | 8.67 | 7.32 | 1.21 | 0.23 | 0.41 | Cohen d +0.14 |  |
+| trans_N2_to_N3_per_hr | Welch t | 1.52 | 1.40 | 1.00 | 0.32 | 0.48 | Cohen d +0.14 |  |
+| trans_N2_to_REM_per_hr | Welch t | 0.66 | 0.72 | -1.10 | 0.27 | 0.46 | Cohen d -0.13 |  |
+| n3_latency_min | Welch t | 87.88 | 77.39 | 1.03 | 0.3 | 0.47 | Cohen d +0.13 |  |
+| pct_unknown_epochs | Welch t | 0.74 | 0.69 | 0.78 | 0.43 | 0.58 | Cohen d +0.13 |  |
+| trans_N2_to_Wake_per_hr | Welch t | 2.77 | 2.38 | 1.51 | 0.13 | 0.29 | Cohen d +0.12 |  |
+| transitions_per_hr | Welch t | 12.76 | 13.27 | -1.10 | 0.28 | 0.46 | Cohen d -0.12 |  |
+| resp_central_apnea_idx | Welch t | 4.01 | 3.33 | 0.74 | 0.46 | 0.6 | Cohen d +0.10 |  |
+| site | chi-square | — | — | 7.62 | 0.022 | 0.066 | Cramer V +0.08 |  |
+| awakenings_per_hr_sleep | Welch t | 5.59 | 5.23 | 0.81 | 0.42 | 0.57 | Cohen d +0.08 |  |
+| stage_shift_index | Welch t | 19.94 | 19.09 | 0.86 | 0.39 | 0.57 | Cohen d +0.08 |  |
+| mean_sleep_bout_min | Welch t | 15.00 | 16.19 | -1.06 | 0.29 | 0.47 | Cohen d -0.07 |  |
+| duration_hours | Welch t | 7.44 | 7.51 | -0.63 | 0.53 | 0.67 | Cohen d -0.07 |  |
+| ethnicity | chi-square | — | — | 4.12 | 0.13 | 0.29 | Cramer V +0.06 |  |
+| trans_N1_to_Wake_per_hr | Welch t | 2.33 | 2.20 | 0.50 | 0.62 | 0.76 | Cohen d +0.06 |  |
+| resp_RERA_idx | Welch t | 1.57 | 1.67 | -0.38 | 0.7 | 0.8 | Cohen d -0.05 |  |
+| race | chi-square | — | — | 2.30 | 0.68 | 0.8 | Cramer V +0.05 |  |
+| sex | chi-square | — | — | 2.06 | 0.15 | 0.3 | Cramer V +0.04 |  |
+| single_epoch_spikes | Welch t | 22.57 | 22.11 | 0.36 | 0.72 | 0.8 | Cohen d +0.04 |  |
+| n_wake_bouts | Welch t | 26.69 | 27.00 | -0.21 | 0.84 | 0.91 | Cohen d -0.02 |  |
+| n_awakenings | Welch t | 25.79 | 26.05 | -0.18 | 0.86 | 0.92 | Cohen d -0.02 |  |
+| mean_wake_bout_min | Welch t | 6.19 | 5.81 | 0.47 | 0.64 | 0.76 | Cohen d +0.02 |  |
+| n_sleep_bouts | Welch t | 26.01 | 26.23 | -0.15 | 0.88 | 0.92 | Cohen d -0.02 |  |
+| pct_N2 | Welch t | 45.61 | 45.77 | -0.11 | 0.91 | 0.93 | Cohen d -0.01 |  |
+| sleep_latency_min | Welch t | 23.97 | 23.77 | 0.07 | 0.94 | 0.94 | Cohen d +0.01 |  |
+
+_Effect size: Cohen d for numeric (|0.2| small · |0.5| medium · |0.8| large), Cramér V for categorical. Age's large d≈1.1 is the confounder the age-conditioned metric neutralises — significance here is descriptive, not age-adjusted._
+
+## 6. Data Quality & Cross-Modality Coverage
 
 > **Data quality & coverage.** Not every recording has every modality. The three
 > label sources are the raw *physio* EDF, the *CAISR* automated annotations, and
