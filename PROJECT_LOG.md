@@ -9,6 +9,38 @@ Legend: ✅ done & verified · 🔬 verified against data · 📌 needs follow-u
 
 ---
 
+## 2026-08-05 (viewer per-patient report) — Sleep-dynamics report in the viewer
+
+Added a **per-patient sleep-dynamics report** to the biosignal viewer so the
+transition/fragmentation stats we computed cohort-wide are now available live
+for whichever patient is loaded.
+
+### New `scripts/viewer/dynamics.py` + `/api/dynamics`
+Self-contained port of the cohort transition algorithm (`stats_transitions.py`)
+for a single patient's CAISR stage channel. Computes the 5×5 stage-transition
+probability matrix P(X→Y), fragmentation ("spikes") — awakenings, brief wake
+intrusions, stage-shift index, single-epoch stage spikes, wake/sleep bout
+counts+durations, REM periods — and named directed transition rates. Each number
+is paired with the **cohort baseline** (pooled means over 1090 recordings,
+embedded as `COHORT_FRAG`/`COHORT_MATRIX` from `eda/transitions.json`).
+- 🔬 Verified on pdmle against a real patient (`sub-I0002150000076`, TST 6.98 h):
+  matrix rows sum to 100%, every fragmentation + named-transition field
+  populated with its cohort comparison; endpoint + glossary served correctly.
+
+### Viewer UI — `index.html` `dynamicsCard`
+New card after the CAISR panel: the transition matrix as a single-hue **blue
+sequential heatmap** (darker = more likely, exact % in each cell, hover shows
+this-patient vs. cohort + Δpp), then fragmentation and transition-rate tiles.
+Each tile shows the cohort mean and a ▲/▼ arrow; tiles where the patient is
+**worse than the cohort** turn red (color paired with a glyph, per dataviz
+rules). Definitions added to `glossary.py` (`DYNAMICS_GLOSSARY`, 18 entries) so
+every stat and the matrix header have hover explanations.
+- ⚠️ Verified structurally + against live JSON on pdmle; not yet browser-rendered
+  (no headless browser). Redeployed bundle at `/data-temp/physio-viewer/`;
+  restart under `arshia_ilaty_physio26` to pick it up.
+
+---
+
 ## 2026-08-05 (latest) — Stage dynamics, feature significance, abnormal-value flagging
 
 Added detailed sleep-dynamics statistics, a formal significance analysis, and

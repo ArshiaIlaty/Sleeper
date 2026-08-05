@@ -100,6 +100,36 @@ FIELD_GLOSSARY = {
 }
 
 
+# --- per-patient stage-dynamics / fragmentation metrics ----------------------
+# Explanations for the "Sleep dynamics" report card (transition matrix,
+# fragmentation "spikes", bout structure, named transitions).
+DYNAMICS_GLOSSARY = {
+    "transition matrix": (
+        "Each cell is the probability that an epoch in the row stage is "
+        "immediately followed (30 s later) by the column stage. Rows sum to "
+        "100%. A high diagonal means stable sleep; off-diagonal mass means the "
+        "night keeps switching stages."
+    ),
+    "n_awakenings": "Number of times the patient transitioned from any sleep stage to Wake after first falling asleep. More awakenings = more fragmented sleep.",
+    "awakenings_per_hr_sleep": "Awakenings normalised per hour of sleep, so recordings of different length are comparable.",
+    "brief_wake_intrusions": "Single-epoch (30 s) bursts of Wake sandwiched between sleep — micro-awakening-like interruptions that briefly break sleep continuity.",
+    "stage_shift_index": "Total number of stage changes per hour of sleep — a direct measure of how unstable the night's architecture is. Higher = more fragmented.",
+    "single_epoch_spikes": "Stages that appear for exactly one 30 s epoch flanked by the same other stage on both sides — rapid 'spikes' into a stage that don't hold.",
+    "spikes_per_hr_sleep": "Single-epoch stage spikes normalised per hour of sleep.",
+    "n_wake_bouts": "Number of separate wake episodes across the recording. Many short wake bouts indicate fragmented sleep.",
+    "n_sleep_bouts": "Number of separate continuous sleep episodes. More, shorter bouts means sleep is broken into pieces.",
+    "mean_sleep_bout_min": "Average length (minutes) of an uninterrupted sleep episode. Longer is better — consolidated sleep.",
+    "mean_wake_bout_min": "Average length (minutes) of a wake episode after sleep onset. Long wake bouts point to sustained awakenings.",
+    "n_rem_periods": "Number of distinct REM episodes. A healthy night cycles through roughly 4–6 REM periods.",
+    "Deepening (N2→N3)": "Rate (per hour of sleep) of descending from light N2 into deep N3 — building up restorative slow-wave sleep.",
+    "Lightening (N3→N2)": "Rate of deep N3 slipping back up to lighter N2. Elevated in impaired sleep — deep sleep isn't held.",
+    "Into REM (N2→REM)": "Rate of entering REM sleep from N2, per hour of sleep.",
+    "REM→Wake": "Rate of waking directly out of REM sleep. Frequent REM→Wake fragments dreaming sleep.",
+    "N1→Wake": "Rate of waking out of the lightest sleep stage — easy, frequent arousals.",
+    "N2→Wake": "Rate of waking directly out of N2, the most common sleep stage.",
+}
+
+
 # --- clinical reference ("normal") ranges, adult AASM / sleep-medicine norms ---
 # Each entry: normal = [lo, hi] the value is expected to fall within for a
 # healthy adult; direction tells the UI which side is abnormal ("high" = only
@@ -157,7 +187,7 @@ def _flatten():
     lower-cased; index keys also stored without their unit suffix."""
     out = {}
     for src in (INDEX_GLOSSARY, STAGE_GLOSSARY, METRIC_GLOSSARY,
-                ROLE_GLOSSARY, FIELD_GLOSSARY):
+                ROLE_GLOSSARY, FIELD_GLOSSARY, DYNAMICS_GLOSSARY):
         for k, v in src.items():
             out[k.lower()] = v
     return out
@@ -169,6 +199,7 @@ GLOSSARY = {
     "metric": METRIC_GLOSSARY,
     "role": ROLE_GLOSSARY,
     "field": FIELD_GLOSSARY,
+    "dynamics": DYNAMICS_GLOSSARY,
     "ranges": REFERENCE_RANGES,
     "flat": _flatten(),
 }

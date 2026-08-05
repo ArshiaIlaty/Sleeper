@@ -51,6 +51,29 @@
         padding:16px 18px;margin-bottom:16px;}
   .card h2{font-size:14px;margin:0 0 12px;font-weight:700;text-transform:uppercase;
            letter-spacing:.04em;color:var(--ink2);}
+  .card h3{font-size:12px;margin:16px 0 8px;font-weight:700;text-transform:uppercase;
+           letter-spacing:.03em;color:var(--muted);}
+  /* stage-transition heatmap (patient vs cohort, sequential blue ramp) */
+  .matrix{display:grid;gap:2px;font-size:11.5px;max-width:520px;}
+  .matrix .mh{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.03em;
+              display:flex;align-items:center;justify-content:center;font-weight:700;}
+  .matrix .mrl{font-size:11px;color:var(--ink2);font-weight:700;display:flex;
+               align-items:center;justify-content:flex-end;padding-right:6px;}
+  .matrix .mcell{border-radius:4px;height:38px;display:flex;align-items:center;
+                 justify-content:center;font-variant-numeric:tabular-nums;font-weight:700;cursor:help;}
+  .matrix .corner{font-size:9.5px;color:var(--muted);display:flex;align-items:flex-end;
+                  justify-content:flex-end;padding:0 4px 3px 0;line-height:1.1;text-align:right;}
+  .mcap{font-size:11px;color:var(--muted);margin:4px 0 0;}
+  /* value-vs-cohort dynamics tiles */
+  .dyn-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(158px,1fr));gap:10px;}
+  .dyn{background:var(--surface);border:1px solid var(--grid);border-radius:8px;padding:8px 10px;}
+  .dyn .n{font-size:18px;font-weight:700;font-variant-numeric:tabular-nums;}
+  .dyn .l{font-size:11px;color:var(--muted);}
+  .dyn .c{font-size:10.5px;color:var(--muted);margin-top:3px;}
+  .dyn.worse{background:#fdeff1;border-color:var(--red);}
+  .dyn.worse .n{color:var(--red);}
+  .dyn .arrow{font-weight:700;}
+  .dyn .arrow.bad{color:var(--red);} .dyn .arrow.ok{color:var(--aqua);}
   .demo-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px 18px;}
   .demo-grid .k{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.03em;}
   .demo-grid .v{font-size:15px;font-weight:600;}
@@ -220,13 +243,15 @@ async function selectPatient(bids, li){
   if(li) li.classList.add("active");
   const m = $("#main");
   m.innerHTML = `<div class="loading">Loading ${bids}…</div>`;
-  const [demo, caisr] = await Promise.all([
+  const [demo, caisr, dyn] = await Promise.all([
     jget("/api/demographics?bids="+encodeURIComponent(bids)),
     jget("/api/caisr?bids="+encodeURIComponent(bids)),
+    jget("/api/dynamics?bids="+encodeURIComponent(bids)),
   ]);
   m.innerHTML = "";
   m.appendChild(demoCard(demo));
   m.appendChild(caisrCard(caisr));
+  m.appendChild(dynamicsCard(dyn));
   m.appendChild(signalCard());
   loadSignals();  // fetch default channels
 }
@@ -292,6 +317,90 @@ function caisrCard(d){
   c.appendChild(g);
   return c;
 }
+
+// ---- per-patient sleep dynamics report ----
+// Sequential blue ramp (white -> --blue #2166a0) for the transition heatmap:
+// magnitude encoded by fill darkness, exact % printed in every cell.
+function heatColor(p){                       // p in 0..1
+  const t = Math.max(0, Math.min(1, p));
+  const r = Math.round(255 + (0x21-255)*t);
+  const g = Math.round(255 + (0x66-255)*t);
+  const b = Math.round(255 + (0xa0-255)*t);
+  return `rgb(${r},${g},${b})`;
+}
+function fmtNum(v){ return (v==null||!isFinite(v)) ? "—" : (Math.round(v*100)/100); }
+// worse=true -> higher is worse; false -> lower is worse; null -> neutral.
+function cmpArrow(value, cohort, worse){
+  if(value==null||cohort==null||!isFinite(value)||worse==null) return {cls:"",arrow:"",worse:false};
+  const hi = value > cohort, lo = value < cohort;
+  if(!hi && !lo) return {cls:"",arrow:"≈",worse:false};
+  const bad = worse ? hi : lo;             // worse-than-cohort direction
+  return {cls: bad?"bad":"ok", arrow: hi?"▲":"▼", worse: bad};
+}
+function dynamicsCard(d){
+  const c = div("card");
+  if(d && d.error){ c.innerHTML = `<h2>Sleep dynamics</h2><div class="err">${d.error}</div>`; return c; }
+  if(!d || !d.ok){ c.innerHTML = `<h2>Sleep dynamics</h2><div class="hint">No stage-transition data for this recording.</div>`; return c; }
+  const matTip = tipFor('dynamics','transition matrix');
+  c.innerHTML = `<h2>Sleep dynamics — stage transitions &amp; fragmentation</h2>`;
+
+  // --- transition matrix heatmap ---
+  const h3 = document.createElement("h3");
+  h3.textContent = "Stage-to-stage transition probability";
+  if(matTip){ h3.className="info"; h3.setAttribute("data-tip", matTip); }
+  c.appendChild(h3);
+
+  const order = d.stage_order;              // [Wake,N1,N2,N3,REM]
+  const grid = div("matrix");
+  grid.style.gridTemplateColumns = `72px repeat(${order.length}, 1fr)`;
+  grid.appendChild(cellEl("corner", "from ↓ / to →"));
+  for(const s of order) grid.appendChild(cellEl("mh", s));
+  for(let i=0;i<order.length;i++){
+    grid.appendChild(cellEl("mrl", order[i]));
+    for(let j=0;j<order.length;j++){
+      const p = d.transition_pct[i][j];
+      const coh = d.cohort_pct[i][j];
+      const cell = cellEl("mcell", p>=0.5? p+"%" : (p>0? "<1%":"0"));
+      cell.style.background = heatColor(p/100);
+      cell.style.color = p>55 ? "#fff" : "var(--ink)";
+      const delta = (p-coh>=0?"+":"") + Math.round((p-coh)*10)/10;
+      cell.setAttribute("data-tip",
+        `<b>${order[i]} → ${order[j]}</b><br>This patient: ${p}%<br>Cohort mean: ${coh}%<br>Δ ${delta} pp vs cohort`);
+      grid.appendChild(cell);
+    }
+  }
+  c.appendChild(grid);
+  const cap = document.createElement("div"); cap.className="mcap";
+  cap.textContent = `Each row sums to 100%. Darker = more likely. Hover a cell to compare with the cohort mean. Sleep time ≈ ${d.tst_hours} h.`;
+  c.appendChild(cap);
+
+  // --- fragmentation tiles ---
+  c.appendChild(dynSection("Fragmentation & spikes (vs cohort mean)", d.fragmentation));
+  // --- named transition rates ---
+  const named = d.named_transitions.map(n=>({...n, higher_is_worse:null}));
+  c.appendChild(dynSection("Key transition rates (per hour of sleep)", named));
+  return c;
+}
+function dynSection(title, items){
+  const wrap = div("");
+  const h = document.createElement("h3"); h.textContent = title; wrap.appendChild(h);
+  const g = div("dyn-grid");
+  for(const it of items){
+    const cmp = cmpArrow(it.value, it.cohort, it.higher_is_worse);
+    const tile = div("dyn" + (cmp.worse?" worse":""));
+    const tip = tipFor('dynamics', it.key);
+    if(tip){ tile.classList.add("info"); tile.setAttribute("data-tip", tip); }
+    const unit = it.unit==="count" ? "" : " "+it.unit;
+    const arrow = cmp.arrow ? ` <span class="arrow ${cmp.cls}">${cmp.arrow}</span>` : "";
+    tile.innerHTML = `<div class="n">${fmtNum(it.value)}${unit}${arrow}</div>`+
+                     `<div class="l">${it.label}</div>`+
+                     `<div class="c">cohort ${fmtNum(it.cohort)}${unit}</div>`;
+    g.appendChild(tile);
+  }
+  wrap.appendChild(g);
+  return wrap;
+}
+function cellEl(cls, text){ const d=div(cls); d.textContent=text; return d; }
 
 function hypnogramSVG(hyp){
   const W = 900, H = 150, padL = 46, padR = 12, padT = 10, padB = 22;

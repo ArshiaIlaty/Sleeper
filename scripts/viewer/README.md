@@ -4,6 +4,13 @@ An interactive, single-page web app to browse the dataset one patient at a time:
 
 - **Demographics** panel (age, sex, race, BMI, follow-up fields, CI label)
 - **CAISR sleep staging** — hypnogram, stage-% bar, and event indices (AHI, arousal, PLMI, apnea/hypopnea/RERA)
+- **Sleep dynamics report** — a per-patient stage-transition matrix P(stage→next
+  stage) rendered as a blue heatmap (hover any cell for this-patient vs. cohort
+  comparison), plus fragmentation/"spike" statistics (awakenings, brief wake
+  intrusions, stage-shift index, single-epoch spikes, bout counts/durations, REM
+  periods) and named transition rates. Every number is shown against the cohort
+  mean and flagged **red** when the patient is worse than average. Computed on
+  demand in `dynamics.py` (same algorithm as the cohort EDA `stats_transitions.py`).
 - **PSG signals** — pick any channels; the server downsamples each to ~2500 points before sending, so the 170 MB EDFs never hit the browser
 - **Hover explanations** — every event index, sleep stage, channel, and
   demographic field shows a plain-language tooltip on hover (or keyboard focus).
@@ -25,8 +32,9 @@ frontend is one dependency-free `index.html` (vanilla JS + inline SVG).
 
 | File | Purpose |
 |---|---|
-| `app.py` | HTTP server + JSON API (`/api/patients`, `/api/demographics`, `/api/caisr`, `/api/signals`, `/api/glossary`, `/static/*`) |
-| `glossary.py` | Plain-language definitions of every metric, stage, channel role, and field (drives the hover tooltips) |
+| `app.py` | HTTP server + JSON API (`/api/patients`, `/api/demographics`, `/api/caisr`, `/api/dynamics`, `/api/signals`, `/api/glossary`, `/static/*`) |
+| `glossary.py` | Plain-language definitions of every metric, stage, channel role, field, and dynamics stat + clinical reference ranges (drives the hover tooltips) |
+| `dynamics.py` | Per-patient stage-transition matrix + fragmentation stats, with an embedded cohort baseline (mirrors `scripts/eda/stats_transitions.py`) |
 | `index.html` | Single-page UI (vanilla JS + SVG, validated Edwards palette, tooltip engine) |
 | `edwards_logo.png` | Header logo, served from `/static/` (no CDN) |
 | `run.sh` | Launch helper with a data-readability pre-check |

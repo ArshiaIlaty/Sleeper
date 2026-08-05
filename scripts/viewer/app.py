@@ -30,6 +30,7 @@ import numpy as np
 import edfio
 
 from glossary import GLOSSARY
+from dynamics import patient_dynamics
 
 DATA_ROOT = os.environ.get(
     "PHYSIONET_DATA_ROOT",
@@ -215,6 +216,28 @@ def api_caisr(bids):
             "stage_pct": stage_pct, "n_epochs": len(hypno)}
 
 
+def api_dynamics(bids):
+    """Per-patient sleep-stage dynamics report: the epoch-to-epoch transition
+    matrix + fragmentation/spike statistics, each paired with the cohort mean.
+    Reads only the small CAISR stage channel."""
+    r = _patient_record(bids)
+    if not r:
+        return {"error": "unknown patient"}
+    site, sess = r.get("SiteID", ""), r.get("SessionID", "1")
+    f = _find_edf(CAISR_DIR, site, bids, sess, "_caisr_annotations")
+    if not f:
+        return {"error": "no CAISR annotation file for this patient"}
+    edf = edfio.read_edf(f, lazy_load_data=False)
+    stage = None
+    for s in edf.signals:
+        if s.label.strip() == "stage_caisr":
+            stage = np.asarray(s.data, float)
+            break
+    out = patient_dynamics(stage)
+    out["bids"] = bids
+    return out
+
+
 def api_signals(bids, want=None):
     r = _patient_record(bids)
     if not r:
@@ -299,6 +322,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(api_demographics(bids))
             if u.path == "/api/caisr":
                 return self._send(api_caisr(bids))
+            if u.path == "/api/dynamics":
+                return self._send(api_dynamics(bids))
             if u.path == "/api/signals":
                 want = q.get("ch")
                 return self._send(api_signals(bids, want))
