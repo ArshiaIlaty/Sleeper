@@ -1,6 +1,6 @@
 # Project data and generated outputs
 data/
-eda/
+/eda/
 *.log
 logs/
 .s3_cache/
