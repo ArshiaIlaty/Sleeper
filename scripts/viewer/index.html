@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PhysioNet 2026 — Biosignal Viewer</title>
+<style>
+  /* Validated Edwards palette (dataviz color checks): red #C8102E / blue #2166a0 */
+  :root{
+    --surface:#fcfcfb; --panel:#ffffff; --ink:#0b0b0b; --ink2:#52514e;
+    --muted:#898781; --grid:#e1e0d9; --axis:#c3c2b7; --border:rgba(11,11,11,.10);
+    --red:#C8102E; --blue:#2166a0; --gold:#a6791f; --aqua:#1baf7a;
+    --n3:#104281; --n2:#2a78d6; --n1:#5598e7; --wake:#9ec5f4; --rem:#C8102E;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Arial,sans-serif;
+       background:var(--surface);color:var(--ink);font-size:14px;}
+  header{background:var(--blue);color:#fff;padding:12px 20px;display:flex;
+         align-items:center;gap:16px;}
+  header h1{font-size:17px;margin:0;font-weight:700;}
+  header .sub{opacity:.85;font-size:12.5px;}
+  .layout{display:grid;grid-template-columns:300px 1fr;gap:0;height:calc(100vh - 50px);}
+  aside{border-right:1px solid var(--border);overflow-y:auto;background:var(--panel);}
+  .search{padding:10px;position:sticky;top:0;background:var(--panel);border-bottom:1px solid var(--border);}
+  .search input{width:100%;padding:8px 10px;border:1px solid var(--axis);border-radius:6px;font-size:13px;}
+  .plist{list-style:none;margin:0;padding:0;}
+  .plist li{padding:8px 12px;border-bottom:1px solid var(--grid);cursor:pointer;
+            display:flex;justify-content:space-between;align-items:center;gap:8px;}
+  .plist li:hover{background:#f0f6fd;}
+  .plist li.active{background:#e3eefb;border-left:3px solid var(--blue);}
+  .pid{font-family:ui-monospace,monospace;font-size:12px;}
+  .pmeta{font-size:11px;color:var(--muted);white-space:nowrap;}
+  .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;vertical-align:middle;}
+  .dot.ci{background:var(--red);} .dot.noci{background:var(--blue);}
+  main{overflow-y:auto;padding:18px 22px;}
+  .placeholder{color:var(--muted);text-align:center;margin-top:80px;font-size:15px;}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:10px;
+        padding:16px 18px;margin-bottom:16px;}
+  .card h2{font-size:14px;margin:0 0 12px;font-weight:700;text-transform:uppercase;
+           letter-spacing:.04em;color:var(--ink2);}
+  .demo-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px 18px;}
+  .demo-grid .k{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.03em;}
+  .demo-grid .v{font-size:15px;font-weight:600;}
+  .badge{display:inline-block;padding:3px 10px;border-radius:20px;font-size:12px;font-weight:700;color:#fff;}
+  .badge.ci{background:var(--red);} .badge.noci{background:var(--blue);}
+  .idx-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;}
+  .idx{background:var(--surface);border:1px solid var(--grid);border-radius:8px;padding:8px 10px;}
+  .idx .n{font-size:19px;font-weight:700;font-variant-numeric:tabular-nums;}
+  .idx .l{font-size:11px;color:var(--muted);}
+  .stagebar{display:flex;height:34px;border-radius:6px;overflow:hidden;margin-bottom:6px;}
+  .stagebar span{display:flex;align-items:center;justify-content:center;color:#fff;
+                 font-size:11px;font-weight:700;border-right:2px solid var(--surface);}
+  .legend{font-size:11.5px;color:var(--ink2);display:flex;gap:14px;flex-wrap:wrap;}
+  .legend b{font-weight:700;}
+  .chrow{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;}
+  .chip{padding:4px 10px;border:1px solid var(--axis);border-radius:16px;cursor:pointer;
+        font-size:12px;background:var(--panel);user-select:none;}
+  .chip.on{background:var(--blue);color:#fff;border-color:var(--blue);}
+  svg{display:block;width:100%;}
+  .axis-label{font-size:10px;fill:var(--muted);}
+  .sig-label{font-size:11px;font-weight:700;fill:var(--ink);}
+  .loading{color:var(--muted);font-size:13px;padding:10px 0;}
+  .err{color:var(--red);font-size:13px;padding:8px 0;font-weight:600;}
+  .hint{color:var(--muted);font-size:12px;margin-top:4px;}
+</style>
+</head>
+<body>
+<header>
+  <h1>PhysioNet 2026 · Biosignal Viewer</h1>
+  <span class="sub" id="cohort">loading…</span>
+</header>
+<div class="layout">
+  <aside>
+    <div class="search"><input id="q" placeholder="Filter by patient ID / site…" autocomplete="off"></div>
+    <ul class="plist" id="plist"></ul>
+  </aside>
+  <main id="main">
+    <div class="placeholder">← Select a patient to view demographics, sleep staging, and PSG signals.</div>
+  </main>
+</div>
+
+<script>
+"use strict";
+const $ = s => document.querySelector(s);
+let PATIENTS = [], CURRENT = null, SIGCACHE = {};
+
+async function jget(url){ const r = await fetch(url); return r.json(); }
+
+// ---- patient list ----
+async function loadPatients(){
+  const d = await jget("/api/patients");
+  PATIENTS = d.patients;
+  $("#cohort").textContent = `${d.n} patients · 3 sites`;
+  renderList("");
+}
+function renderList(filter){
+  const f = filter.toLowerCase();
+  const ul = $("#plist"); ul.innerHTML = "";
+  let shown = 0;
+  for(const p of PATIENTS){
+    if(f && !(p.bids.toLowerCase().includes(f) || (p.site_name||"").toLowerCase().includes(f))) continue;
+    if(shown++ > 400){ // cap DOM for perf; refine via search
+      const li = document.createElement("li");
+      li.innerHTML = `<span class="pmeta">…refine search to see more</span>`;
+      ul.appendChild(li); break;
+    }
+    const ci = String(p.label).toLowerCase()==="true";
+    const li = document.createElement("li");
+    li.dataset.bids = p.bids;
+    li.innerHTML = `<span class="pid"><span class="dot ${ci?'ci':'noci'}"></span>${p.bids.replace('sub-','')}</span>`+
+                   `<span class="pmeta">${p.site_name} · ${p.age||'?'}${(p.sex||'?')[0]}</span>`;
+    li.onclick = () => selectPatient(p.bids, li);
+    ul.appendChild(li);
+  }
+}
+$("#q").addEventListener("input", e => renderList(e.target.value));
+
+// ---- patient detail ----
+async function selectPatient(bids, li){
+  CURRENT = bids; SIGCACHE = {};
+  document.querySelectorAll(".plist li").forEach(x=>x.classList.remove("active"));
+  if(li) li.classList.add("active");
+  const m = $("#main");
+  m.innerHTML = `<div class="loading">Loading ${bids}…</div>`;
+  const [demo, caisr] = await Promise.all([
+    jget("/api/demographics?bids="+encodeURIComponent(bids)),
+    jget("/api/caisr?bids="+encodeURIComponent(bids)),
+  ]);
+  m.innerHTML = "";
+  m.appendChild(demoCard(demo));
+  m.appendChild(caisrCard(caisr));
+  m.appendChild(signalCard());
+  loadSignals();  // fetch default channels
+}
+
+function demoCard(d){
+  const c = div("card");
+  if(d.error){ c.innerHTML = `<div class="err">${d.error}</div>`; return c; }
+  const ci = String(d.fields.Cognitive_Impairment).toLowerCase()==="true";
+  let h = `<h2>Demographics — <span class="pid">${d.bids}</span> `+
+          `<span class="badge ${ci?'ci':'noci'}">${ci?'Cognitive Impairment':'No impairment'}</span></h2>`;
+  h += `<div class="demo-grid">`;
+  const order = [["Age","Age"],["Sex","Sex"],["Race","Race"],["Ethnicity","Ethnicity"],
+                 ["BMI","BMI"],["SessionID","Session"],["Time_to_Event","Time→Event (d)"],
+                 ["Time_to_Last_Visit","Time→Last visit (d)"],["CreationTime","Recorded"]];
+  for(const [k,lab] of order) h += `<div><div class="k">${lab}</div><div class="v">${d.fields[k]}</div></div>`;
+  h += `<div><div class="k">Site</div><div class="v">${d.site_name}</div></div></div>`;
+  c.innerHTML = h; return c;
+}
+
+function caisrCard(d){
+  const c = div("card");
+  if(d.error){ c.innerHTML = `<h2>CAISR sleep annotations</h2><div class="err">${d.error}</div>`; return c; }
+  c.innerHTML = `<h2>CAISR sleep staging &amp; events</h2>`;
+  // stage % bar
+  const order = ["Wake","N1","N2","N3","REM"];
+  const colors = {Wake:"var(--wake)",N1:"var(--n1)",N2:"var(--n2)",N3:"var(--n3)",REM:"var(--rem)"};
+  if(d.stage_pct && Object.keys(d.stage_pct).length){
+    const bar = div("stagebar");
+    for(const s of order){ const v = d.stage_pct[s]||0; if(v<=0) continue;
+      const sp = document.createElement("span");
+      sp.style.width = v+"%"; sp.style.background = colors[s];
+      sp.textContent = v>=5 ? `${s} ${v}%` : ""; bar.appendChild(sp); }
+    c.appendChild(bar);
+    const lg = div("legend");
+    lg.innerHTML = order.map(s=>`<span><span class="dot" style="background:${colors[s]}"></span>${s} <b>${d.stage_pct[s]??0}%</b></span>`).join("");
+    c.appendChild(lg);
+  }
+  // hypnogram
+  c.appendChild(hypnogramSVG(d.hypnogram));
+  // event indices
+  const g = div("idx-grid"); g.style.marginTop = "12px";
+  for(const [k,v] of Object.entries(d.indices)){
+    const it = div("idx");
+    it.innerHTML = `<div class="n">${v==null?"—":v}</div><div class="l">${k}</div>`;
+    g.appendChild(it);
+  }
+  c.appendChild(g);
+  return c;
+}
+
+function hypnogramSVG(hyp){
+  const W = 900, H = 150, padL = 46, padR = 12, padT = 10, padB = 22;
+  const svg = svgEl("svg",{viewBox:`0 0 ${W} ${H}`}); svg.style.marginTop="10px";
+  if(!hyp || !hyp.length){ return svg; }
+  const tmax = hyp[hyp.length-1].t_min || 1;
+  const ymap = {4:"Wake",3:"REM",2:"N1",1:"N2",0:"N3"};
+  const x = t => padL + (t/tmax)*(W-padL-padR);
+  const y = v => padT + (4-v)/4*(H-padT-padB);
+  // gridlines + stage labels
+  for(let v=0; v<=4; v++){
+    svg.appendChild(svgEl("line",{x1:padL,x2:W-padR,y1:y(v),y2:y(v),stroke:"var(--grid)","stroke-width":1}));
+    svg.appendChild(txt(padL-8, y(v)+3, ymap[v], {"text-anchor":"end", class:"axis-label"}));
+  }
+  // stepped hypnogram path; break the line on Unknown epochs (y<0) rather than
+  // dipping below the axis, and color REM segments red.
+  let dpath = "", prevY = null;
+  hyp.forEach(p=>{ const X=x(p.t_min);
+    if(p.y < 0){ prevY = null; return; }        // Unknown -> gap
+    const Y = y(p.y);
+    if(prevY === null){ dpath += `M${X},${Y}`; } else { dpath += ` L${X},${prevY} L${X},${Y}`; }
+    prevY = Y; });
+  svg.appendChild(svgEl("path",{d:dpath, fill:"none", stroke:"var(--blue)","stroke-width":1.5}));
+  // REM overlay dots
+  hyp.forEach(p=>{ if(p.stage==="REM"){ svg.appendChild(svgEl("circle",{cx:x(p.t_min),cy:y(p.y),r:1.3,fill:"var(--rem)"})); }});
+  // x axis ticks (hours)
+  const hrs = Math.ceil(tmax/60);
+  for(let h=0; h<=hrs; h++){ const X=x(h*60);
+    svg.appendChild(txt(X, H-6, h+"h", {"text-anchor":"middle", class:"axis-label"})); }
+  return svg;
+}
+
+// ---- signals ----
+let SELECTED_CH = ["C4-M1","EKG","SaO2","stage"]; // defaults if present
+function signalCard(){
+  const c = div("card"); c.id = "sigcard";
+  c.innerHTML = `<h2>PSG signals <span class="hint">(server-downsampled; pick channels)</span></h2>
+    <div class="chrow" id="chrow"><span class="loading">loading channel list…</span></div>
+    <div id="sigplots"></div>`;
+  return c;
+}
+async function loadSignals(){
+  const d = await jget("/api/signals?bids="+encodeURIComponent(CURRENT)); // no ch -> returns labels + all? cap
+  renderSignalCard(d);
+}
+async function fetchChannels(labels){
+  const key = labels.join("|");
+  if(SIGCACHE[key]) return SIGCACHE[key];
+  const qs = labels.map(l=>"ch="+encodeURIComponent(l)).join("&");
+  const d = await jget(`/api/signals?bids=${encodeURIComponent(CURRENT)}&${qs}`);
+  SIGCACHE[key] = d; return d;
+}
+function renderSignalCard(d){
+  const row = $("#chrow"); if(!row) return;
+  if(d.error){ row.innerHTML = `<div class="err">${d.error}</div>`; return; }
+  const labels = d.all_labels || [];
+  // choose sensible defaults present in this montage
+  const want = [];
+  const prefer = ["C4-M1","C3-M2","F3-M2","EKG","EEG","SaO2","SpO2","AIRFLOW","CFLOW","THORACIC","CHEST","ABD"];
+  for(const p of prefer){ const m = labels.find(l=>l.toLowerCase()===p.toLowerCase()); if(m && want.length<4) want.push(m); }
+  if(!want.length) want.push(...labels.slice(0,3));
+  row.innerHTML = "";
+  for(const l of labels){
+    const chip = document.createElement("span");
+    chip.className = "chip" + (want.includes(l)?" on":"");
+    chip.textContent = l; chip.dataset.ch = l;
+    chip.onclick = () => { chip.classList.toggle("on"); drawSelected(); };
+    row.appendChild(chip);
+  }
+  drawSelected();
+}
+async function drawSelected(){
+  const on = [...document.querySelectorAll("#chrow .chip.on")].map(c=>c.dataset.ch);
+  const box = $("#sigplots");
+  if(!on.length){ box.innerHTML = `<div class="hint">Select one or more channels above.</div>`; return; }
+  box.innerHTML = `<div class="loading">loading ${on.length} channel(s)…</div>`;
+  const d = await fetchChannels(on);
+  if(d.error){ box.innerHTML = `<div class="err">${d.error}</div>`; return; }
+  box.innerHTML = "";
+  for(const s of d.series) box.appendChild(signalSVG(s, d.duration_s));
+}
+function signalSVG(s, dur){
+  const W=900, H=90, padL=52, padR=12, padT=8, padB=18;
+  const wrap = div("");
+  const svg = svgEl("svg",{viewBox:`0 0 ${W} ${H}`});
+  const ys = s.y.filter(v=>v!=null && isFinite(v));
+  if(!ys.length){ svg.appendChild(txt(padL, H/2, s.label+" (no data)", {class:"sig-label"})); wrap.appendChild(svg); return wrap; }
+  let mn=Math.min(...ys), mx=Math.max(...ys); if(mn===mx){mx=mn+1;}
+  const tmax = s.t.length? s.t[s.t.length-1] : dur;
+  const X = t => padL + (t/tmax)*(W-padL-padR);
+  const Y = v => padT + (1-(v-mn)/(mx-mn))*(H-padT-padB);
+  let dpath=""; let started=false;
+  for(let i=0;i<s.t.length;i++){ const v=s.y[i]; if(v==null||!isFinite(v)){started=false;continue;}
+    const px=X(s.t[i]), py=Y(v); dpath += (started?` L${px},${py}`:`M${px},${py}`); started=true; }
+  svg.appendChild(svgEl("line",{x1:padL,x2:W-padR,y1:H-padB,y2:H-padB,stroke:"var(--grid)","stroke-width":1}));
+  svg.appendChild(svgEl("path",{d:dpath, fill:"none", stroke:"var(--blue)","stroke-width":1}));
+  svg.appendChild(txt(padL, padT+2, `${s.label}`, {class:"sig-label"}));
+  svg.appendChild(txt(padL, H-4, `${mn.toFixed(1)}–${mx.toFixed(1)} ${s.unit||''} · ${s.fs}Hz`, {class:"axis-label"}));
+  wrap.appendChild(svg); return wrap;
+}
+
+// ---- svg helpers ----
+function div(cls){ const d=document.createElement("div"); if(cls)d.className=cls; return d; }
+function svgEl(tag, attrs){ const e=document.createElementNS("http://www.w3.org/2000/svg",tag);
+  for(const k in attrs) e.setAttribute(k, attrs[k]); return e; }
+function txt(x,y,s,attrs){ const t=svgEl("text",Object.assign({x,y},attrs||{})); t.textContent=s; return t; }
+
+loadPatients();
+</script>
+</body>
+</html>
