@@ -9,6 +9,59 @@ Legend: ✅ done & verified · 🔬 verified against data · 📌 needs follow-u
 
 ---
 
+## 2026-08-05 (later) — Dataset tree, viewer tooltips + logo, report explanations
+
+Follow-up on the same day to make everything self-explanatory and better
+organized.
+
+### Dataset tree + samples — `eda/DATASET_TREE.md` (271 lines)
+New reference doc (`scripts/eda/dataset_tree.py`, run on pdmle) giving the full
+picture of *what we have*: directory tree with per-site file counts, the
+`sub-<PID>_ses-<N>` naming convention, every `demographics.csv` column
+(dtype/missingness/distribution) + a real sample row, `ICD_codes_CI.csv` schema
++ top-15 codes, a representative physio EDF header (19-ch BIDMC montage,
+header-only), CAISR annotation value distributions + a decoded hypnogram
+snippet, expert-annotation comparison, and a modality-coverage table. 🔬 All
+values measured (215 GB total on disk; 0 EDF read errors).
+- ⚠️ **Surfaced two data gotchas the team should know:**
+  1. `resp_caisr` contains an **undocumented code `3`** (~0.2% of samples) not
+     in our code map {1,2,4,5}. Our AHI currently counts {1,2,4} and ignores 3
+     — defensible (rare, undocumented) but noted, not silently changed.
+  2. **Expert annotations use a different code convention** than CAISR (codes
+     0/7/9 appear) — decode expert files with the expert convention, not the
+     CAISR maps.
+
+### Viewer — hover explanations + Edwards logo (`scripts/viewer/`)
+- `glossary.py` (new): one source of truth for plain-language definitions of
+  every event index (AHI, arousal, PLMI, apnea subtypes, RERA), sleep stage,
+  derived metric, channel role, and demographic field. Served at
+  `/api/glossary`.
+- `index.html`: added a delegated tooltip engine — hover (or keyboard-focus) any
+  event tile, stage-legend item, channel chip, or demographic field to see its
+  explanation. Cursor/dotted-underline affordance marks hoverable items.
+- Edwards logo added to the header (`edwards_logo.png`, served from `/static/`
+  with a path-traversal guard; falls back gracefully if absent).
+- `app.py`: `/api/glossary` + `/static/*` routes; `channel_role()` classifier;
+  `roles` map added to `/api/signals` responses (both the labels-only chip path
+  and the trace path).
+- ✅ Verified end-to-end **on pdmle against real data**: glossary/logo/static/
+  patients/caisr/signals all return correctly; every channel in the sampled
+  montages maps to a real role (0 "other"). A live-data test caught one bug —
+  `roles` was missing from the labels-only response — now fixed and re-verified.
+- ⚠️ Stale viewer processes from earlier sessions are still bound to 8050/8051
+  running OLD code; restart the viewer under `arshia_ilaty_physio26` to pick up
+  the new build. Redeployed bundle is at `/data-temp/physio-viewer/`.
+
+### Dataset report explanations — `scripts/eda/report.py`
+Each section now opens with a plain-language callout (blockquote) explaining the
+terms for a mixed ML+clinical audience: what prevalence & 95% CI mean, why the
+age breakdown matters (confounding), missingness, an **ICD-10 decoder table**
+(every top code → its dementia/MCI meaning), biosignal/montage terms, and the
+full sleep-metric glossary (stages, TST, efficiency, WASO, AHI, arousal, PLMI).
+Regenerated `eda/DATASET_REPORT.md` (13.2K → 19.1K chars).
+
+---
+
 ## 2026-08-05 — Dataset statistics, figures, paper, viewer, and deck
 
 Goal: turn the raw dataset into (a) a comprehensive, trustworthy statistical

@@ -20,6 +20,7 @@ import re
 import csv
 import json
 import glob
+import mimetypes
 import argparse
 import functools
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -27,6 +28,8 @@ from urllib.parse import urlparse, parse_qs
 
 import numpy as np
 import edfio
+
+from glossary import GLOSSARY
 
 DATA_ROOT = os.environ.get(
     "PHYSIONET_DATA_ROOT",
@@ -38,6 +41,30 @@ CAISR_DIR = os.path.join(DATA_ROOT, "algorithmic_annotations")
 
 SITE_NAMES = {"S0001": "BIDMC", "I0002": "Emory", "I0006": "Kaiser"}
 STAGE_CODES = {1: "N3", 2: "N2", 3: "N1", 4: "REM", 5: "Wake", 9: "Unknown"}
+HERE = os.path.dirname(os.path.abspath(__file__))
+# Channel-role inference for tooltips: (role, [substring cues in the label]).
+# First match wins; order matters (specific before generic).
+_ROLE_CUES = [
+    ("ecg", ["ekg", "ecg"]),
+    ("spo2", ["spo2", "sao2"]),
+    ("chin_emg", ["chin"]),
+    ("limb_emg", ["leg", "lat", "rat", "lleg", "rleg", "plm"]),
+    ("eog", ["e1", "e2", "eog", "loc", "roc"]),
+    ("airflow", ["flow", "therm", "nasal", "ptaf", "cpap", "press", "npt", "cpres"]),
+    ("effort", ["chest", "abd", "thor", "thorac", "abdomen"]),
+    ("eeg", ["f3", "f4", "c3", "c4", "o1", "o2", "m1", "m2", "eeg", "fp", "cz", "pz"]),
+]
+
+
+def channel_role(label):
+    """Infer a coarse channel role from its label, for tooltip lookup."""
+    lab = label.lower()
+    toks = set(re.split(r"[^a-z0-9]+", lab))
+    for role, cues in _ROLE_CUES:
+        for cue in cues:
+            if cue in toks or (len(cue) > 2 and cue in lab):
+                return role
+    return "other"
 # Hypnogram plotting order (y position): Wake top ... N3 bottom, REM between.
 STAGE_Y = {"Wake": 4, "REM": 3, "N1": 2, "N2": 1, "N3": 0}
 RESP_CODES = {1: "Obstructive apnea", 2: "Central apnea", 4: "Hypopnea", 5: "RERA"}
@@ -199,11 +226,12 @@ def api_signals(bids, want=None):
     edf = edfio.read_edf(f, lazy_load_data=True)
     duration = float(edf.duration)
     labels = [s.label.strip() for s in edf.signals]
+    roles = {l: channel_role(l) for l in labels}  # for chip tooltips
     if want is None:
         # No channels requested: return the montage (labels) only — header-only,
         # so we never decimate 16 channels of sample data just to populate chips.
         return {"bids": bids, "duration_s": round(duration, 1),
-                "all_labels": labels, "series": []}
+                "all_labels": labels, "roles": roles, "series": []}
     want_l = [w.strip().lower() for w in want]
     result_labels = [l for l in labels if l.lower() in want_l]
 
@@ -216,11 +244,11 @@ def api_signals(bids, want=None):
         xi, ys = _decimate(data, POINTS)
         fs = float(s.sampling_frequency)
         t = (xi / fs).tolist() if fs else xi.tolist()
-        series.append({"label": lab, "fs": fs,
+        series.append({"label": lab, "fs": fs, "role": channel_role(lab),
                        "unit": str(getattr(s, "physical_dimension", "") or "").strip(),
                        "t": [round(x, 3) for x in t], "y": ys})
     return {"bids": bids, "duration_s": round(duration, 1),
-            "all_labels": labels, "series": series}
+            "all_labels": labels, "roles": roles, "series": series}
 
 
 # --------------------------------------------------------------------------- http
@@ -233,6 +261,24 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_static(self, name):
+        """Serve a bundled static asset (e.g. the logo) from the viewer dir.
+        Guards against path traversal — only plain filenames in HERE are served."""
+        if "/" in name or "\\" in name or name.startswith("."):
+            return self._send({"error": "bad path"}, code=400)
+        path = os.path.join(HERE, name)
+        if not os.path.isfile(path):
+            return self._send({"error": "not found"}, code=404)
+        ctype = mimetypes.guess_type(path)[0] or "application/octet-stream"
+        with open(path, "rb") as fh:
+            body = fh.read()
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "max-age=3600")
+        self.end_headers()
+        self.wfile.write(body)
+
     def log_message(self, *a):
         pass  # quiet
 
@@ -242,6 +288,10 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if u.path in ("/", "/index.html"):
                 return self._send(INDEX_HTML, ctype="text/html; charset=utf-8")
+            if u.path == "/api/glossary":
+                return self._send(GLOSSARY)
+            if u.path.startswith("/static/"):
+                return self._send_static(u.path[len("/static/"):])
             if u.path == "/api/patients":
                 return self._send(api_patients())
             bids = (q.get("bids", [None])[0])

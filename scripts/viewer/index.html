@@ -19,6 +19,19 @@
          align-items:center;gap:16px;}
   header h1{font-size:17px;margin:0;font-weight:700;}
   header .sub{opacity:.85;font-size:12.5px;}
+  header .logo{background:#fff;border-radius:6px;padding:4px 7px;display:flex;
+               align-items:center;height:34px;}
+  header .logo img{height:26px;display:block;}
+  /* hoverable-for-explanation affordance */
+  .info{cursor:help;border-bottom:1px dotted currentColor;}
+  .idx.info,.chip.info{border-bottom:none;}
+  .idx[data-tip],.chip[data-tip],[data-tip]{cursor:help;}
+  .tip{position:fixed;z-index:1000;max-width:320px;background:#12222c;color:#f4f7f8;
+       font-size:12px;line-height:1.5;padding:9px 11px;border-radius:8px;
+       box-shadow:0 6px 24px rgba(0,0,0,.28);pointer-events:none;opacity:0;
+       transition:opacity .09s ease;}
+  .tip.show{opacity:1;}
+  .tip b{color:#8fc0e8;}
   .layout{display:grid;grid-template-columns:300px 1fr;gap:0;height:calc(100vh - 50px);}
   aside{border-right:1px solid var(--border);overflow-y:auto;background:var(--panel);}
   .search{padding:10px;position:sticky;top:0;background:var(--panel);border-bottom:1px solid var(--border);}
@@ -66,9 +79,11 @@
 </head>
 <body>
 <header>
+  <span class="logo"><img src="/static/edwards_logo.png" alt="Edwards" onerror="this.parentNode.style.display='none'"></span>
   <h1>PhysioNet 2026 · Biosignal Viewer</h1>
   <span class="sub" id="cohort">loading…</span>
 </header>
+<div id="tip" class="tip" role="tooltip" aria-hidden="true"></div>
 <div class="layout">
   <aside>
     <div class="search"><input id="q" placeholder="Filter by patient ID / site…" autocomplete="off"></div>
@@ -82,9 +97,47 @@
 <script>
 "use strict";
 const $ = s => document.querySelector(s);
-let PATIENTS = [], CURRENT = null, SIGCACHE = {};
+let PATIENTS = [], CURRENT = null, SIGCACHE = {}, GLOSSARY = null;
 
 async function jget(url){ const r = await fetch(url); return r.json(); }
+
+// ---- tooltip engine ----
+// Any element with a data-tip attribute shows that text on hover/focus. One
+// shared tooltip node, positioned near the cursor, kept on-screen.
+const TIP = () => $("#tip");
+function showTip(el, ev){
+  const txt = el.getAttribute("data-tip"); if(!txt) return;
+  const t = TIP(); t.innerHTML = txt; t.classList.add("show"); t.setAttribute("aria-hidden","false");
+  moveTip(ev || el.getBoundingClientRect());
+}
+function moveTip(ev){
+  const t = TIP(); const pad = 14;
+  let x, y;
+  if(ev && ev.clientX != null){ x = ev.clientX + pad; y = ev.clientY + pad; }
+  else { x = (ev.left||0); y = (ev.bottom||0) + 6; }   // element rect fallback
+  const w = t.offsetWidth, h = t.offsetHeight;
+  if(x + w + 8 > window.innerWidth)  x = window.innerWidth  - w - 8;
+  if(y + h + 8 > window.innerHeight) y = window.innerHeight - h - 8;
+  if(x < 6) x = 6; if(y < 6) y = 6;
+  t.style.left = x + "px"; t.style.top = y + "px";
+}
+function hideTip(){ const t = TIP(); t.classList.remove("show"); t.setAttribute("aria-hidden","true"); }
+// event delegation: works for dynamically-added elements
+document.addEventListener("mouseover", e => { const el = e.target.closest("[data-tip]"); if(el) showTip(el, e); });
+document.addEventListener("mousemove", e => { if(TIP().classList.contains("show")) moveTip(e); });
+document.addEventListener("mouseout", e => { if(e.target.closest("[data-tip]")) hideTip(); });
+document.addEventListener("focusin", e => { const el = e.target.closest("[data-tip]"); if(el) showTip(el, el.getBoundingClientRect()); });
+document.addEventListener("focusout", hideTip);
+
+// glossary lookup: case-insensitive, tolerant of unit suffixes like " (/h)"
+function tipFor(kind, key){
+  if(!GLOSSARY || !key) return "";
+  const clean = String(key).replace(/\s*\(.*?\)\s*$/, "").trim();  // drop "(…)"
+  const bucket = GLOSSARY[kind] || {};
+  const hit = bucket[clean] || bucket[key] || (GLOSSARY.flat||{})[clean.toLowerCase()];
+  return hit ? `<b>${clean}</b> — ${hit}` : "";
+}
+function setTip(el, kind, key){ const x = tipFor(kind, key); if(x){ el.setAttribute("data-tip", x); el.classList.add("info"); } }
 
 // ---- patient list ----
 async function loadPatients(){
@@ -143,8 +196,10 @@ function demoCard(d){
   const order = [["Age","Age"],["Sex","Sex"],["Race","Race"],["Ethnicity","Ethnicity"],
                  ["BMI","BMI"],["SessionID","Session"],["Time_to_Event","Time→Event (d)"],
                  ["Time_to_Last_Visit","Time→Last visit (d)"],["CreationTime","Recorded"]];
-  for(const [k,lab] of order) h += `<div><div class="k">${lab}</div><div class="v">${d.fields[k]}</div></div>`;
-  h += `<div><div class="k">Site</div><div class="v">${d.site_name}</div></div></div>`;
+  const tipAttr = (kind,key)=>{ const x=tipFor(kind,key); return x?` data-tip="${x.replace(/"/g,'&quot;')}"`:""; };
+  for(const [k,lab] of order)
+    h += `<div><div class="k${tipFor('field',k)?' info':''}"${tipAttr('field',k)}>${lab}</div><div class="v">${d.fields[k]}</div></div>`;
+  h += `<div><div class="k info"${tipAttr('field','Site')}>Site</div><div class="v">${d.site_name}</div></div></div>`;
   c.innerHTML = h; return c;
 }
 
@@ -163,7 +218,8 @@ function caisrCard(d){
       sp.textContent = v>=5 ? `${s} ${v}%` : ""; bar.appendChild(sp); }
     c.appendChild(bar);
     const lg = div("legend");
-    lg.innerHTML = order.map(s=>`<span><span class="dot" style="background:${colors[s]}"></span>${s} <b>${d.stage_pct[s]??0}%</b></span>`).join("");
+    lg.innerHTML = order.map(s=>{ const x=tipFor('stage',s); const attr=x?` class="info" data-tip="${x.replace(/"/g,'&quot;')}"`:"";
+      return `<span${attr}><span class="dot" style="background:${colors[s]}"></span>${s} <b>${d.stage_pct[s]??0}%</b></span>`; }).join("");
     c.appendChild(lg);
   }
   // hypnogram
@@ -172,6 +228,7 @@ function caisrCard(d){
   const g = div("idx-grid"); g.style.marginTop = "12px";
   for(const [k,v] of Object.entries(d.indices)){
     const it = div("idx");
+    setTip(it, 'index', k);
     it.innerHTML = `<div class="n">${v==null?"—":v}</div><div class="l">${k}</div>`;
     g.appendChild(it);
   }
@@ -240,10 +297,13 @@ function renderSignalCard(d){
   for(const p of prefer){ const m = labels.find(l=>l.toLowerCase()===p.toLowerCase()); if(m && want.length<4) want.push(m); }
   if(!want.length) want.push(...labels.slice(0,3));
   row.innerHTML = "";
+  const roles = d.roles || {};
   for(const l of labels){
     const chip = document.createElement("span");
     chip.className = "chip" + (want.includes(l)?" on":"");
     chip.textContent = l; chip.dataset.ch = l;
+    const rtip = tipFor('role', roles[l]);
+    if(rtip){ chip.setAttribute("data-tip", `${l} · ${rtip}`); }
     chip.onclick = () => { chip.classList.toggle("on"); drawSelected(); };
     row.appendChild(chip);
   }
@@ -285,7 +345,11 @@ function svgEl(tag, attrs){ const e=document.createElementNS("http://www.w3.org/
   for(const k in attrs) e.setAttribute(k, attrs[k]); return e; }
 function txt(x,y,s,attrs){ const t=svgEl("text",Object.assign({x,y},attrs||{})); t.textContent=s; return t; }
 
-loadPatients();
+async function boot(){
+  try { GLOSSARY = await jget("/api/glossary"); } catch(e){ GLOSSARY = null; }
+  await loadPatients();
+}
+boot();
 </script>
 </body>
 </html>
