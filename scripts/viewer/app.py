@@ -31,6 +31,7 @@ import edfio
 
 from glossary import GLOSSARY
 from dynamics import patient_dynamics
+from preprocess import staging_report
 
 DATA_ROOT = os.environ.get(
     "PHYSIONET_DATA_ROOT",
@@ -72,6 +73,9 @@ RESP_CODES = {1: "Obstructive apnea", 2: "Central apnea", 4: "Hypopnea", 5: "RER
 LIMB_CODES = {1: "Isolated limb", 2: "Periodic limb"}
 
 POINTS = 2500          # max points per channel sent to the browser
+# Minimum plausible stage-bout length (epochs) for hypnogram smoothing; 2 = 1 min
+# so only single-epoch spikes are removed (the most conservative setting).
+MIN_BOUT_EPOCHS = int(os.environ.get("CAISR_MIN_BOUT_EPOCHS", "2"))
 _FILE_RE = re.compile(r"sub-([A-Za-z0-9]+)_ses-(\d+)")
 
 
@@ -174,14 +178,12 @@ def api_caisr(bids):
     chans = {s.label.strip(): np.asarray(s.data, float) for s in edf.signals}
     fs_of = {s.label.strip(): float(s.sampling_frequency) for s in edf.signals}
 
+    # Staging: raw + preprocessed hypnograms (implausible single-epoch stage
+    # spikes merged via minimum-bout-duration smoothing). See preprocess.py.
     stage = chans.get("stage_caisr")
-    hypno = []
+    staging = None
     if stage is not None:
-        st = np.rint(stage).astype(int)
-        for i, code in enumerate(st):
-            name = STAGE_CODES.get(int(code), "Unknown")
-            hypno.append({"t_min": round(i * 0.5, 2),
-                          "y": STAGE_Y.get(name, -1), "stage": name})
+        staging = staging_report(np.rint(stage).astype(int), min_bout_epochs=MIN_BOUT_EPOCHS)
 
     # Event indices per hour of recording (quick panel summary). resp/limb are
     # 1 Hz and arousal 2 Hz, so hours = samples / (fs * 3600); fs inferred below.
@@ -202,18 +204,22 @@ def api_caisr(bids):
     for code, nm in RESP_CODES.items():
         indices[nm + " (/h)"] = rate(resp, [code], fs_of.get("resp_caisr"))
 
-    # stage % for a donut/summary
-    stage_pct = {}
-    if stage is not None:
-        valid = np.rint(stage).astype(int)
-        valid = valid[valid != 9]
-        for code, nm in STAGE_CODES.items():
-            if code == 9 or valid.size == 0:
-                continue
-            stage_pct[nm] = round(100.0 * np.count_nonzero(valid == code) / valid.size, 1)
-
-    return {"bids": bids, "hypnogram": hypno, "indices": indices,
-            "stage_pct": stage_pct, "n_epochs": len(hypno)}
+    out = {"bids": bids, "indices": indices}
+    if staging is not None:
+        # raw view keeps the original field names for backward compatibility;
+        # the cleaned view + change summary are added alongside.
+        out["hypnogram"] = staging["hypnogram"]
+        out["hypnogram_clean"] = staging["hypnogram_clean"]
+        out["stage_pct"] = staging["stage_pct"]
+        out["stage_pct_clean"] = staging["stage_pct_clean"]
+        out["preprocess"] = {k: staging[k] for k in
+                             ("method", "min_bout_epochs", "min_bout_min", "summary")}
+        out["n_epochs"] = staging["summary"]["n_epochs"]
+    else:
+        out["hypnogram"] = []
+        out["stage_pct"] = {}
+        out["n_epochs"] = 0
+    return out
 
 
 def api_dynamics(bids):

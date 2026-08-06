@@ -9,6 +9,51 @@ Legend: ✅ done & verified · 🔬 verified against data · 📌 needs follow-u
 
 ---
 
+## 2026-08-06 — CAISR hypnogram preprocessing, raw-vs-clean tab, count heatmap, run guide
+
+Four viewer additions requested by the team.
+
+### Hypnogram preprocessing — `scripts/viewer/preprocess.py`
+Removes biologically implausible rapid stage transitions via
+**minimum-bout-duration smoothing** (iterative shortest-bout merge): any
+*interior* stage bout shorter than `min_bout_epochs` (default 2 = 1 min) is
+relabelled to its longer neighbour (ties → preceding). Only interior bouts are
+merged, so legitimate wake at sleep onset/offset is preserved; Unknown(9) and
+event indices (AHI etc.) are untouched.
+- **Why this over alternatives:** stage codes are categorical not ordinal, so a
+  numeric median filter invents nonsensical stages; an HMM on CAISR's *hard*
+  labels (no emission probabilities) collapses to a transition-smoothing prior —
+  i.e. this, but opaque. The rule-based smoother states its one assumption (a
+  minimum plausible bout length) explicitly and is fully reproducible.
+- 🔬 Verified on 3 real patients across sites: removes ~half of all stage
+  transitions (e.g. 108→56, 144→55), all single-epoch spikes; N1 (the flickery
+  light stage) consistently shrinks, N2/N3/REM consolidate. `/api/caisr` now
+  returns raw + cleaned hypnograms, both stage-%, and a change summary.
+
+### Viewer — raw vs. preprocessed staging tab (`index.html`)
+The CAISR card's staging panel now has **Compare / Raw / Preprocessed** tabs
+(defaults to Compare). Compare stacks both hypnograms — raw drawn as a faint grey
+ghost under the blue cleaned trace — with per-view stage-% bars and a banner
+reporting epochs changed + transitions removed.
+
+### Viewer — transition-count heatmap (diagonal zeroed)
+Added a second heatmap in the dynamics card showing the **raw count** of each
+stage change, with the **diagonal set to zero** (self-transitions removed) so the
+off-diagonal moves carry the colour scale — as requested. Refactored the matrix
+rendering into a reusable `matrixHeatmap(order, cellSpec)` helper. Both heatmaps
+use the validated single-hue blue sequential ramp (dataviz validator: PASS).
+
+### Run guide — `scripts/viewer/HOW_TO_RUN.md`
+Step-by-step host-vs-viewer walkthrough (start server, SSH-tunnel, tmux to keep
+it alive, one-liner, troubleshooting table, IT-safe rationale) since the app is
+only online when someone is hosting it. README links to it + documents
+`preprocess.py` and `CAISR_MIN_BOUT_EPOCHS`.
+
+- ⚠️ Verified structurally + against live JSON on pdmle; not browser-rendered
+  (no headless browser). Redeployed at `/data-temp/physio-viewer/` (perms fixed).
+
+---
+
 ## 2026-08-05 (viewer per-patient report) — Sleep-dynamics report in the viewer
 
 Added a **per-patient sleep-dynamics report** to the biosignal viewer so the

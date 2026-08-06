@@ -110,6 +110,15 @@ DYNAMICS_GLOSSARY = {
         "100%. A high diagonal means stable sleep; off-diagonal mass means the "
         "night keeps switching stages."
     ),
+    "preprocessing": (
+        "Automated scorers sometimes assign a stage to a single 30-s epoch "
+        "wedged between two epochs of another stage — biologically implausible, "
+        "since a real stage has inertia. We remove these by minimum-bout-duration "
+        "smoothing: any interior bout shorter than the threshold is merged into "
+        "its longer neighbour. Only interior bouts are touched, so legitimate "
+        "wake at sleep onset/offset is kept. Event indices (AHI etc.) are "
+        "unaffected — only the stage sequence is cleaned."
+    ),
     "n_awakenings": "Number of times the patient transitioned from any sleep stage to Wake after first falling asleep. More awakenings = more fragmented sleep.",
     "awakenings_per_hr_sleep": "Awakenings normalised per hour of sleep, so recordings of different length are comparable.",
     "brief_wake_intrusions": "Single-epoch (30 s) bursts of Wake sandwiched between sleep — micro-awakening-like interruptions that briefly break sleep continuity.",
