@@ -141,6 +141,7 @@
   .sig-frame{fill:none;stroke:var(--axis);stroke-width:1;}
   .sig-brush{fill:rgba(33,101,160,.14);stroke:var(--blue);stroke-width:1;stroke-dasharray:3 2;}
   .sig-cross{stroke:var(--red);stroke-width:1;}
+  .seam{stroke:var(--gold);stroke-width:1;stroke-dasharray:2 3;stroke-opacity:.7;}
   .sig-dot{fill:var(--red);stroke:#fff;stroke-width:1;}
   .sig-readout{font-size:10px;fill:var(--red);font-weight:700;paint-order:stroke;stroke:#fff;stroke-width:2.5;}
   .sigbar{display:flex;align-items:center;gap:12px;margin:2px 0 10px;flex-wrap:wrap;}
@@ -803,8 +804,18 @@ function signalSVG(s, w0, w1){
   const xt = niceTicks(t0, t1, 5);
   for(const tv of xt){ svg.appendChild(txt(X(tv), H-6, fmtClock(tv), {"text-anchor":"middle", class:"axis-label"})); }
 
-  attachZoom(svg, {padL, padT, plotW, plotH, t0, t1, X, Y, s});
+  attachZoom(svg, {padL, padT, plotW, plotH, t0, t1, X, Y, s, unit:s.unit,
+    onWindow:setSigWindow, onReset:resetZoom, onZoom:zoomAround});
   wrap.appendChild(svg); return wrap;
+}
+// map a time on the concatenated stage timeline back to real night-time (s),
+// using the bout position map; returns null if outside all bouts.
+function _concatToNight(bouts, ct){
+  for(const b of bouts){
+    if(ct >= b.concat_start_s - 1e-6 && ct <= b.concat_end_s + 1e-6)
+      return b.night_start_s + (ct - b.concat_start_s);
+  }
+  return null;
 }
 // nearest in-window sample to time `tv`; returns {t, v} or null (skips gaps)
 function _nearestSample(s, tv){
@@ -845,16 +856,20 @@ if(!window.__sigZoomInit){
     const a=_sigToT(svg,g,startClient), b=_sigToT(svg,g,e.clientX);
     if(brush && brush.parentNode) brush.parentNode.removeChild(brush);
     SIG_DRAG = null;
-    if(Math.abs(b-a) > 0.4) setSigWindow(a,b);                // real drag -> zoom
+    if(Math.abs(b-a) > 0.4) g.onWindow(a,b);                  // real drag -> zoom
   });
 }
+// `g` carries the plot geometry (padL/padT/plotW/plotH), the view time span
+// (t0/t1), the scale fns (X/Y), the data series `s` ({t,y}), the `unit`, and the
+// zoom callbacks onWindow(a,b) / onReset() / onZoom(factor,centre) — so this one
+// controller drives both the whole-night PSG plots and the per-stage plots.
 function attachZoom(svg, g){
   const cross = svgEl("line",{class:"sig-cross",y1:g.padT,y2:g.padT+g.plotH,x1:g.padL,x2:g.padL});
   cross.style.display="none";
   const dot = svgEl("circle",{class:"sig-dot",r:2.6,cx:g.padL,cy:g.padT}); dot.style.display="none";
   const readout = txt(g.padL+2, g.padT+10, "", {class:"sig-readout"}); readout.style.display="none";
   svg.appendChild(cross); svg.appendChild(dot); svg.appendChild(readout);
-  const unit = (g.s.unit || "").trim();
+  const unit = (g.unit || (g.s && g.s.unit) || "").trim();
   svg.addEventListener("mousemove", e=>{
     const vx = _sigClampX(svg,g,e.clientX);
     const tv = _sigToT(svg,g,e.clientX);
@@ -866,7 +881,10 @@ function attachZoom(svg, g){
     if(near){
       const cy = g.Y(near.v);
       dot.style.display=""; dot.setAttribute("cx", g.X(near.t)); dot.setAttribute("cy", cy);
-      label = `${fmtClock(near.t)}  ·  ${near.v.toFixed(2)}${unit?(" "+unit):""}`;
+      // for the concatenated-stage plot, also show where in the night this sample is
+      const nite = g.bouts ? _concatToNight(g.bouts, near.t) : null;
+      const when = nite!=null ? ` @ night ${fmtDur(nite)}` : "";
+      label = `${fmtClock(near.t)}${when}  ·  ${near.v.toFixed(2)}${unit?(" "+unit):""}`;
       readout.setAttribute("y", Math.max(g.padT+10, Math.min(g.padT+g.plotH-2, cy-6)));
     } else {
       dot.style.display="none"; readout.setAttribute("y", g.padT+10);
@@ -885,12 +903,12 @@ function attachZoom(svg, g){
     SIG_DRAG = {svg, g, startClient:e.clientX, startX, brush};
     e.preventDefault();
   });
-  svg.addEventListener("dblclick", ()=> resetZoom());
+  svg.addEventListener("dblclick", ()=> g.onReset());
   // scroll to zoom, centered on the cursor's time (the natural zoom gesture)
   svg.addEventListener("wheel", e=>{
     e.preventDefault();
     const tv = _sigToT(svg,g,e.clientX);
-    zoomAround(e.deltaY < 0 ? 0.8 : 1.25, tv);      // up = in, down = out
+    g.onZoom(e.deltaY < 0 ? 0.8 : 1.25, tv);        // up = in, down = out
   }, {passive:false});
 }
 
@@ -995,6 +1013,135 @@ async function drawStageSignal(ch){
   const cap2 = div("mcap");
   cap2.textContent = "The 30-second epoch from the middle of each stage's longest continuous bout — the 'purest' stretch of that stage — so you can compare morphology across stages side by side.";
   box.appendChild(cap2);
+
+  // (4) whole-stage concatenated signal, zoomable like the PSG plots
+  box.appendChild(fullStageSection(d));
+}
+// ---- whole-stage concatenated signal (all epochs of one stage, zoomable) ----
+// Its own little zoom state, mirroring the PSG one but scoped to this section so
+// the two don't fight over globals.
+let FS_STATE = null;   // {ch, stage, dur, win, unit, color_key}
+function fullStageSection(d){
+  const wrap = div(""); wrap.id = "fullstage";
+  const h = document.createElement("h3");
+  h.textContent = "Full stage signal (all epochs, zoomable)";
+  const htip = tipFor('dynamics','full_stage'); if(htip){ h.className="info"; h.setAttribute("data-tip", htip); }
+  wrap.appendChild(h);
+  const avail = d.stages.filter(s=>s.n_epochs>0);
+  // stage picker buttons
+  const tabs = div("tabs");
+  for(const s of avail){
+    const btn = document.createElement("button");
+    btn.textContent = `${s.stage} · ${s.minutes}m`; btn.dataset.stage = s.stage;
+    btn.onclick = () => selectFullStage(s.stage);
+    tabs.appendChild(btn);
+  }
+  wrap.appendChild(tabs);
+  const bar = div("sigbar"); bar.id = "fsbar"; bar.style.display = "none";
+  bar.innerHTML = `<span class="win" id="fswin"></span>
+    <button id="fszin">+ Zoom in</button>
+    <button id="fszout">– Zoom out</button>
+    <button id="fsreset">Reset</button>
+    <span class="zhint">scroll to zoom at cursor · drag to select a window · double-click to reset · dashed lines = bout seams (jumps in the night)</span>`;
+  wrap.appendChild(bar);
+  const plot = div(""); plot.id = "fsplot";
+  plot.innerHTML = `<div class="hint">Pick a stage above to view its full concatenated signal.</div>`;
+  wrap.appendChild(plot);
+  // default to the largest stage
+  const def = avail.slice().sort((a,b)=>b.n_epochs-a.n_epochs)[0];
+  // defer so the section is in the DOM before we draw
+  if(def) setTimeout(()=>selectFullStage(def.stage), 0);
+  return wrap;
+}
+function selectFullStage(stage){
+  FS_STATE = {ch: STSIG_CH, stage, dur: null, win: null};
+  const bar = $("#fsbar"); if(bar) bar.style.display = "flex";
+  document.querySelectorAll("#fullstage .tabs button").forEach(b=>b.classList.toggle("on", b.dataset.stage===stage));
+  const zin=$("#fszin"), zout=$("#fszout"), zr=$("#fsreset");
+  if(zin) zin.onclick = ()=>fsZoom(0.5);
+  if(zout) zout.onclick = ()=>fsZoom(2);
+  if(zr) zr.onclick = ()=>{ FS_STATE.win=null; drawFullStage(); };
+  drawFullStage();
+}
+function fsSetWindow(a,b){
+  if(!FS_STATE || FS_STATE.dur==null) return;
+  let lo=Math.max(0,Math.min(a,b)), hi=Math.min(FS_STATE.dur,Math.max(a,b));
+  if(hi-lo < MIN_WIN_S){ const c=(lo+hi)/2; lo=Math.max(0,c-MIN_WIN_S/2); hi=Math.min(FS_STATE.dur,Math.max(lo+MIN_WIN_S,c+MIN_WIN_S/2)); }
+  FS_STATE.win = (lo<=0 && hi>=FS_STATE.dur) ? null : [Math.round(lo*1000)/1000, Math.round(hi*1000)/1000];
+  drawFullStage();
+}
+function fsZoom(factor, centre){
+  if(!FS_STATE) return;
+  const [a,b] = FS_STATE.win || [0, FS_STATE.dur||0];
+  const c = (centre==null) ? (a+b)/2 : Math.max(a, Math.min(b, centre));
+  const half=(b-a)*factor/2; fsSetWindow(c-half, c+half);
+}
+async function drawFullStage(){
+  const box = $("#fsplot"); if(!box || !FS_STATE) return;
+  const {ch, stage, win} = FS_STATE;
+  box.innerHTML = `<div class="loading">loading all ${stage} epochs…</div>`;
+  let qs = "bids="+encodeURIComponent(CURRENT)+"&ch="+encodeURIComponent(ch)+"&stage="+encodeURIComponent(stage);
+  if(win) qs += `&t0=${win[0]}&t1=${win[1]}`;
+  const d = await jget(api("/api/stage_signals", qs));
+  if(!FS_STATE || FS_STATE.ch!==ch || FS_STATE.stage!==stage) return;  // superseded
+  if(d.error){ box.innerHTML = `<div class="err">${d.error}</div>`; return; }
+  if(!d.ok){ box.innerHTML = `<div class="hint">No ${stage} signal.</div>`; return; }
+  FS_STATE.dur = d.total_sec; FS_STATE.unit = d.unit; FS_STATE.color_key = d.color_key;
+  FS_STATE.bouts = d.bouts || [];
+  const w0 = d.window ? d.window[0] : 0;
+  const w1 = d.window ? d.window[1] : d.total_sec;
+  box.innerHTML = "";
+  box.appendChild(fullStageSVG(d, w0, w1));
+  // window readout
+  const wl = $("#fswin");
+  if(wl){ wl.innerHTML = d.window
+    ? `Window <b>${fmtDur(w0)} → ${fmtDur(w1)}</b> (${fmtDur(w1-w0)} of ${fmtDur(d.total_sec)} total ${stage})`
+    : `All ${stage}: <b>${d.total_min} min</b> across ${d.n_bouts} bout${d.n_bouts===1?'':'s'} (${d.n_epochs} epochs)`; }
+  const zin=$("#fszin"), zout=$("#fszout"), zr=$("#fsreset");
+  if(zin) zin.disabled = !!(d.window && (w1-w0)<=MIN_WIN_S);
+  if(zout) zout.disabled = !d.window;
+  if(zr) zr.disabled = !d.window;
+}
+// concatenated-stage plot: like signalSVG but with dashed seam lines at bout
+// boundaries (each seam = a jump to a different point in the night).
+function fullStageSVG(d, w0, w1){
+  const W=900, H=140, padL=56, padR=14, padT=16, padB=22;
+  const wrap = div("sigwrap");
+  const svg = svgEl("svg",{viewBox:`0 0 ${W} ${H}`});
+  const plotW=W-padL-padR, plotH=H-padT-padB;
+  const ys = d.y.filter(v=>v!=null && isFinite(v));
+  if(!ys.length){ svg.appendChild(txt(padL,H/2,`${d.stage} (no data in window)`,{class:"sig-label"})); wrap.appendChild(svg); return wrap; }
+  let mn=Math.min(...ys), mx=Math.max(...ys); if(mn===mx) mx=mn+1;
+  const pad=(mx-mn)*0.06; mn-=pad; mx+=pad;
+  const t0=w0, t1=(w1>w0?w1:w0+1);
+  const X = t => padL + ((t-t0)/(t1-t0))*plotW;
+  const Y = v => padT + (1-(v-mn)/(mx-mn))*plotH;
+  svg.appendChild(svgEl("rect",{x:padL,y:padT,width:plotW,height:plotH,class:"sig-frame"}));
+  [mn,(mn+mx)/2,mx].forEach(v=>{
+    svg.appendChild(svgEl("line",{x1:padL-3,x2:padL,y1:Y(v),y2:Y(v),stroke:"var(--axis)","stroke-width":1}));
+    svg.appendChild(txt(padL-6, Y(v)+3, v.toFixed(mx-mn<10?2:0), {"text-anchor":"end", class:"axis-label"}));
+  });
+  // bout seams (dashed vertical lines where the concat jumps between night bouts)
+  for(const b of (d.bouts||[])){
+    const cs = b.concat_start_s;
+    if(cs<=t0+1e-6 || cs>=t1) continue;   // skip the very first edge + off-window
+    svg.appendChild(svgEl("line",{x1:X(cs),x2:X(cs),y1:padT,y2:padT+plotH,class:"seam"}));
+  }
+  // waveform
+  const col = `var(--${d.color_key})`;
+  let dpath="",started=false;
+  for(let i=0;i<d.t.length;i++){ const v=d.y[i]; if(v==null||!isFinite(v)){started=false;continue;}
+    const px=X(d.t[i]), py=Y(v); dpath += (started?` L${px},${py}`:`M${px},${py}`); started=true; }
+  svg.appendChild(svgEl("path",{d:dpath, fill:"none", stroke:col, "stroke-width":1.1}));
+  svg.appendChild(txt(padL, padT-4, `${d.stage} — concatenated`, {class:"sig-label"}));
+  svg.appendChild(txt(W-padR, padT-4, `${mn.toFixed(1)}–${mx.toFixed(1)} ${d.unit||''} · ${d.fs}Hz`, {"text-anchor":"end", class:"axis-label"}));
+  // x ticks along the concatenated timeline
+  const xt = niceTicks(t0, t1, 6);
+  for(const tv of xt){ svg.appendChild(txt(X(tv), H-6, fmtClock(tv), {"text-anchor":"middle", class:"axis-label"})); }
+  attachZoom(svg, {padL, padT, plotW, plotH, t0, t1, X, Y, s:{t:d.t,y:d.y}, unit:d.unit,
+    onWindow:fsSetWindow, onReset:()=>{ if(FS_STATE){FS_STATE.win=null; drawFullStage();} }, onZoom:fsZoom,
+    bouts:d.bouts});
+  wrap.appendChild(svg); return wrap;
 }
 // small framed 30-s epoch waveform
 function epochSVG(ex, color, unit){

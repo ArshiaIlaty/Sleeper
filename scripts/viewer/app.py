@@ -29,7 +29,7 @@ import edfio
 from glossary import GLOSSARY
 from dynamics import patient_dynamics
 from preprocess import staging_report, smooth_stages
-from stage_signals import stage_signal_profile
+from stage_signals import stage_signal_profile, stage_concat_signal
 from sources import REGISTRY, DEFAULT_DATASET, get_dataset
 
 SITE_NAMES = {"S0001": "BIDMC", "I0002": "Emory", "I0006": "Kaiser"}
@@ -315,11 +315,16 @@ def _caisr_stage_codes(ds, r, bids):
     return clean, None
 
 
-def api_stage_signals(ds, bids, want=None):
-    """Chunk one PSG channel by (preprocessed) sleep stage and summarise each
-    stage: amplitude stats, a representative example epoch, and — for EEG — mean
-    relative band power. `want` picks the channel; with none given, returns the
-    channel list only (header-only, no waveform decode)."""
+def api_stage_signals(ds, bids, want=None, stage=None, t0=None, t1=None):
+    """Chunk one PSG channel by (preprocessed) sleep stage.
+
+    * `want=None`  -> channel list only (header-only, no waveform decode).
+    * `want=<ch>`, no `stage` -> per-stage profile (amplitude stats, an example
+      epoch, and EEG band power).
+    * `want=<ch>` + `stage=<Wake|N1|N2|N3|REM>` -> the WHOLE stage: every epoch of
+      that stage concatenated into one continuous trace, windowable via `t0`/`t1`
+      (seconds on the concatenated timeline) at full resolution — the same zoom
+      model as /api/signals, so all ~100 min of Wake etc. can be inspected."""
     r = ds.record(bids)
     if not r:
         return {"error": "unknown patient"}
@@ -344,12 +349,19 @@ def api_stage_signals(ds, bids, want=None):
     if sig is None:
         return {"error": f"channel {want} not in this recording"}
     lab = sig.label.strip()
-    prof = stage_signal_profile(np.asarray(sig.data, float),
-                                float(sig.sampling_frequency), codes,
-                                role=channel_role(lab))
+    data = np.asarray(sig.data, float)
+    fs = float(sig.sampling_frequency)
+    unit = str(getattr(sig, "physical_dimension", "") or "").strip()
+
+    if stage is not None:
+        out = stage_concat_signal(data, fs, codes, stage.strip(), t0=t0, t1=t1,
+                                  points=POINTS)
+        out.update({"bids": bids, "dataset": ds.key, "channel": lab, "unit": unit})
+        return out
+
+    prof = stage_signal_profile(data, fs, codes, role=channel_role(lab))
     prof.update({
-        "bids": bids, "dataset": ds.key, "channel": lab,
-        "unit": str(getattr(sig, "physical_dimension", "") or "").strip(),
+        "bids": bids, "dataset": ds.key, "channel": lab, "unit": unit,
         "all_labels": labels, "roles": roles,
         "min_bout_min": round(MIN_BOUT_EPOCHS * 30.0 / 60.0, 2),
     })
@@ -415,7 +427,9 @@ class Handler(BaseHTTPRequestHandler):
                 t1 = q.get("t1", [None])[0]
                 return self._send(api_signals(ds, bids, want, t0, t1))
             if u.path == "/api/stage_signals":
-                return self._send(api_stage_signals(ds, bids, q.get("ch", [None])[0]))
+                return self._send(api_stage_signals(
+                    ds, bids, q.get("ch", [None])[0], q.get("stage", [None])[0],
+                    q.get("t0", [None])[0], q.get("t1", [None])[0]))
             return self._send({"error": "not found"}, code=404)
         except Exception as e:  # never 500 silently — report to the UI
             return self._send({"error": f"{type(e).__name__}: {e}"}, code=500)

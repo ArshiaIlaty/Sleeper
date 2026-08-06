@@ -26,6 +26,7 @@ import numpy as np
 EPOCH_SEC = 30.0
 STAGE_ORDER = [5, 3, 2, 1, 4]                       # Wake, N1, N2, N3, REM
 STAGE_LABEL = {5: "Wake", 3: "N1", 2: "N2", 1: "N3", 4: "REM"}
+STAGE_NAME2CODE = {v: k for k, v in STAGE_LABEL.items()}
 STAGE_COLOR_KEY = {5: "wake", 3: "n1", 2: "n2", 1: "n3", 4: "rem"}
 # EEG relative-power bands (Hz). Sigma = spindle band.
 BANDS = [("delta", 0.5, 4.0), ("theta", 4.0, 8.0), ("alpha", 8.0, 12.0),
@@ -103,6 +104,108 @@ def _band_powers(epochs, fs):
     out = {}
     for nm in acc:
         out[nm] = round(float(np.mean(acc[nm])), 4) if acc[nm] else None
+    return out
+
+
+def _epoch_bounds(codes, code, n_ep):
+    """Contiguous [start_epoch, end_epoch) runs of `code` within codes[:n_ep]."""
+    runs = []
+    start = None
+    for i in range(n_ep):
+        if codes[i] == code and start is None:
+            start = i
+        elif codes[i] != code and start is not None:
+            runs.append((start, i)); start = None
+    if start is not None:
+        runs.append((start, n_ep))
+    return runs
+
+
+def stage_concat_signal(data, fs, stage_codes, stage_name, t0=None, t1=None,
+                        points=2500):
+    """Concatenate every epoch of one stage into a single continuous trace.
+
+    All epochs assigned to `stage_name` (in the preprocessed staging) are joined
+    end to end into one synthetic signal whose own timeline runs 0..(n_epochs*30)s.
+    Optionally windowed to [t0, t1] on that concatenated timeline BEFORE decimating,
+    so a short window returns near-raw samples (same zoom model as /api/signals).
+
+    Returns the decimated trace plus:
+      * `bouts`: the original-night bouts that make up this stage, each with its
+        position on the concatenated timeline and its real clock time in the night,
+        so the UI can draw seams and report where a sample truly came from;
+      * `total_sec`: length of the concatenated stage timeline.
+    """
+    data = np.asarray(data, float)
+    fs = float(fs)
+    codes = np.rint(np.asarray(stage_codes, float)).astype(int)
+    code = STAGE_NAME2CODE.get(stage_name)
+    if code is None:
+        return {"ok": False, "error": f"unknown stage {stage_name}"}
+    if fs <= 0 or data.size == 0 or codes.size == 0:
+        return {"ok": False, "error": "no signal or staging to align"}
+    spe = int(round(fs * EPOCH_SEC))
+    if spe < 1:
+        return {"ok": False, "error": "sampling rate too low"}
+    n_ep = min(codes.size, data.size // spe)
+    runs = _epoch_bounds(codes, code, n_ep)
+    if not runs:
+        return {"ok": False, "error": f"no {stage_name} epochs in this recording"}
+
+    # Build the concatenated sample array and a per-bout position map. Bouts keep
+    # their real night start time (concat is a view for inspection, not re-timing).
+    segments = []
+    bouts = []
+    concat_off = 0                                    # sample offset in concat array
+    for (s_ep, e_ep) in runs:
+        a, b = s_ep * spe, e_ep * spe
+        seg = data[a:b]
+        segments.append(seg)
+        n = seg.size
+        bouts.append({
+            "concat_start_s": round(concat_off / fs, 3),
+            "concat_end_s": round((concat_off + n) / fs, 3),
+            "night_start_s": round(a / fs, 1),
+            "night_start_min": round(a / fs / 60.0, 2),
+            "epochs": int(e_ep - s_ep),
+        })
+        concat_off += n
+    concat = np.concatenate(segments) if segments else np.array([])
+    total_sec = concat.size / fs if fs else 0.0
+
+    # optional zoom window on the concatenated timeline
+    win = None
+    if t0 is not None and t1 is not None:
+        try:
+            a = min(max(0.0, float(t0)), total_sec)
+            b = min(max(0.0, float(t1)), total_sec)
+            if b - a > 1e-6:
+                win = (a, b)
+        except (TypeError, ValueError):
+            win = None
+    t_off = 0.0
+    view = concat
+    if win:
+        i0 = max(0, min(int(np.floor(win[0] * fs)), concat.size))
+        i1 = max(i0 + 1, min(int(np.ceil(win[1] * fs)), concat.size))
+        view = concat[i0:i1]
+        t_off = i0 / fs
+
+    xi, ys = _decimate_envelope(view, points)
+    t = [round(float(x) / fs + t_off, 3) for x in xi]
+    out = {
+        "ok": True, "stage": stage_name, "code": code,
+        "color_key": STAGE_COLOR_KEY[code], "fs": fs,
+        "n_epochs": sum(e - s for s, e in runs),
+        "n_bouts": len(runs),
+        "total_sec": round(total_sec, 1),
+        "total_min": round(total_sec / 60.0, 1),
+        "bouts": bouts,
+        "n_samples": int(view.size),
+        "t": t, "y": ys,
+    }
+    if win:
+        out["window"] = [round(win[0], 3), round(win[1], 3)]
     return out
 
 

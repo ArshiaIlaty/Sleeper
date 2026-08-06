@@ -9,6 +9,41 @@ Legend: ✅ done & verified · 🔬 verified against data · 📌 needs follow-u
 
 ---
 
+## 2026-08-06 (full-stage signal + AHI note) — Whole-stage zoomable trace
+
+Follow-up asks: (Q1) do event indices change under preprocessing? (Q2) show the
+*whole* of each stage as a zoomable signal, not just one example epoch.
+
+### Q1 — why AHI/arousal/PLMI don't move (documented, not changed)
+CAISR scores respiratory/arousal/limb events on their OWN channels (`resp_caisr`
+etc.), independent of the stage channel, so preprocessing (which only smooths
+stages) leaves event *counts* untouched. The viewer's index divides by *recording
+hours* (staging-independent) → identical raw vs preprocessed, as observed.
+Empirically confirmed on 3 patients: only if you use the clinical definition
+(sleep-gated events ÷ TST) does it nudge (~2%, e.g. AHI 21.00→21.41) because a few
+epochs move between Wake and sleep. Also noted a latent inconsistency: the viewer
+(÷recording-hr) and export_features.py (÷TST) use different AHI denominators —
+flagged to the user; left as-is pending their call (colleagues may train on the
+CSV convention).
+
+### Q2 — full-stage concatenated signal — `stage_signals.stage_concat_signal`
+Joins every epoch of one stage end-to-end into a single trace on its own 0..(total
+stage minutes) timeline; `/api/stage_signals?ch=&stage=(&t0=&t1=)` returns it
+windowed at full resolution (same server-side re-slice zoom as `/api/signals`).
+Returns a bout position map (concat position + real night time + epoch count) so
+the UI draws dashed **seam** lines at night-discontinuities and the hover reports
+both concat-time and true night-time.
+- Frontend: **generalized `attachZoom`** to take onWindow/onReset/onZoom callbacks
+  (PSG plots and the new full-stage plot now share one zoom controller; PSG call
+  site rewired, no regression). New `fullStageSection`/`drawFullStage`/`fsSetWindow`
+  /`fsZoom`/`fullStageSVG` with their own FS_STATE + a race guard, separate button
+  ids (#fszin/#fszout/#fsreset) from the PSG bar.
+- 🔬 Verified on a real patient: Wake 85.5 min/8 bouts/171 epochs → 2500-pt
+  overview; 10 s zoom → 2000 raw samples; bout map night-times correct; zero
+  NaN/Inf; valid JSON. Unit-tested seam/clamp/absent-stage/NaN edge cases.
+
+---
+
 ## 2026-08-06 (dynamics + per-stage signals) — Preprocessed dynamics & signal-by-stage
 
 Two requests: (1) show the sleep-dynamics matrices/stats for the **preprocessed**

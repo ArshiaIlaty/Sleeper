@@ -136,6 +136,16 @@ DYNAMICS_GLOSSARY = {
     "REM→Wake": "Rate of waking directly out of REM sleep. Frequent REM→Wake fragments dreaming sleep.",
     "N1→Wake": "Rate of waking out of the lightest sleep stage — easy, frequent arousals.",
     "N2→Wake": "Rate of waking directly out of N2, the most common sleep stage.",
+    "full_stage": (
+        "Every 30 s epoch assigned to the chosen stage (in the preprocessed "
+        "staging) is joined end to end into one continuous trace, so you can scan "
+        "and zoom through all of e.g. the night's Wake or N2 at once. The trace's "
+        "own timeline runs 0 to (total stage minutes); dashed gold lines mark the "
+        "seams where consecutive epochs were NOT adjacent in the real night (a "
+        "jump to a different clock time). Hovering shows both the position on this "
+        "concatenated timeline and where the sample truly falls in the night. "
+        "Drag or scroll to zoom, exactly like the PSG signal plots."
+    ),
     "bandpower": (
         "Fraction of the EEG's 0.5–30 Hz power that falls in each frequency band, "
         "averaged over that stage's 30 s epochs: delta (0.5–4 Hz, slow waves), "
