@@ -48,6 +48,12 @@ FRAG_FIELDS = [
     ("n_rem_periods",          "REM periods",             "count",  None),
 ]
 
+# Stable ordered list of every scalar dynamics field (fragmentation + named
+# transition rates), for the feature-export CSV schema. Matches the keys in the
+# dict returned by _recording_metrics().
+DYNAMIC_FIELDS_ORDER = [f[0] for f in FRAG_FIELDS] + \
+    [f"trans_{a}_to_{b}_per_hr" for a, b, _ in NAMED_TRANSITIONS]
+
 # --- cohort baseline (pooled mean over 1090 recordings; eda/transitions.json) ---
 COHORT_FRAG = {
     "n_awakenings": 26.03, "awakenings_per_hr_sleep": 5.26,

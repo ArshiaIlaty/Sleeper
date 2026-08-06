@@ -120,6 +120,14 @@
   .loading{color:var(--muted);font-size:13px;padding:10px 0;}
   .err{color:var(--red);font-size:13px;padding:8px 0;font-weight:600;}
   .hint{color:var(--muted);font-size:12px;margin-top:4px;}
+  /* dataset selector in the header */
+  header .ds{margin-left:auto;display:flex;align-items:center;gap:8px;}
+  header .ds label{font-size:11px;opacity:.85;text-transform:uppercase;letter-spacing:.04em;}
+  header .ds select{font-size:13px;font-weight:700;padding:5px 9px;border-radius:6px;
+                    border:1px solid rgba(255,255,255,.4);background:#fff;color:var(--ink);
+                    font-family:inherit;cursor:pointer;}
+  .ds-note{background:#fff7e6;border:1px solid #f0d9a8;border-radius:8px;padding:9px 12px;
+           font-size:12px;color:#7a5c12;margin-bottom:12px;line-height:1.5;}
 </style>
 </head>
 <body>
@@ -127,6 +135,8 @@
   <span class="logo"><img src="/static/edwards_logo.png" alt="Edwards" onerror="this.parentNode.style.display='none'"></span>
   <h1>PhysioNet 2026 · Biosignal Viewer</h1>
   <span class="sub" id="cohort">loading…</span>
+  <span class="ds"><label for="dsSel">Dataset</label>
+    <select id="dsSel" title="Choose which cohort to analyze"></select></span>
 </header>
 <div id="tip" class="tip" role="tooltip" aria-hidden="true"></div>
 <div class="layout">
@@ -143,8 +153,15 @@
 "use strict";
 const $ = s => document.querySelector(s);
 let PATIENTS = [], CURRENT = null, SIGCACHE = {}, GLOSSARY = null;
+let DATASETS = [], DATASET = "standard";   // selected cohort
 
 async function jget(url){ const r = await fetch(url); return r.json(); }
+// append the current dataset (+ optional extra query) to an API path
+function api(path, extra){
+  const parts = ["ds=" + encodeURIComponent(DATASET)];
+  if(extra) parts.push(extra);
+  return path + "?" + parts.join("&");
+}
 
 // ---- tooltip engine ----
 // Any element with a data-tip attribute shows that text on hover/focus. One
@@ -222,11 +239,36 @@ function rangeTip(defKind, key, value){
   return parts.join("<br>");
 }
 
+// ---- dataset selector ----
+async function loadDatasets(){
+  try {
+    const d = await jget("/api/datasets");
+    DATASETS = d.datasets || [];
+    DATASET = d.default || (DATASETS[0] && DATASETS[0].key) || "standard";
+  } catch(e){ DATASETS = [{key:"standard",label:"Standard"}]; DATASET = "standard"; }
+  const sel = $("#dsSel"); sel.innerHTML = "";
+  for(const ds of DATASETS){
+    const o = document.createElement("option");
+    o.value = ds.key; o.textContent = ds.label; if(ds.key===DATASET) o.selected = true;
+    sel.appendChild(o);
+  }
+  sel.onchange = () => switchDataset(sel.value);
+}
+async function switchDataset(key){
+  if(key===DATASET) return;
+  DATASET = key; CURRENT = null; SIGCACHE = {};
+  $("#main").innerHTML = `<div class="placeholder">← Select a patient to view demographics, sleep staging, and PSG signals.</div>`;
+  $("#q").value = "";
+  $("#cohort").textContent = "loading…";
+  await loadPatients();
+}
+
 // ---- patient list ----
 async function loadPatients(){
-  const d = await jget("/api/patients");
-  PATIENTS = d.patients;
-  $("#cohort").textContent = `${d.n} patients · 3 sites`;
+  const d = await jget(api("/api/patients"));
+  PATIENTS = d.patients || [];
+  const meta = (DATASETS.find(x=>x.key===DATASET)||{}).label || DATASET;
+  $("#cohort").textContent = `${meta} · ${d.n} patients`;
   renderList("");
 }
 function renderList(filter){
@@ -258,10 +300,11 @@ async function selectPatient(bids, li){
   if(li) li.classList.add("active");
   const m = $("#main");
   m.innerHTML = `<div class="loading">Loading ${bids}…</div>`;
+  const bq = "bids="+encodeURIComponent(bids);
   const [demo, caisr, dyn] = await Promise.all([
-    jget("/api/demographics?bids="+encodeURIComponent(bids)),
-    jget("/api/caisr?bids="+encodeURIComponent(bids)),
-    jget("/api/dynamics?bids="+encodeURIComponent(bids)),
+    jget(api("/api/demographics", bq)),
+    jget(api("/api/caisr", bq)),
+    jget(api("/api/dynamics", bq)),
   ]);
   m.innerHTML = "";
   m.appendChild(demoCard(demo));
@@ -547,20 +590,25 @@ function hypnogramSVG(hyp, ghost){
 let SELECTED_CH = ["C4-M1","EKG","SaO2","stage"]; // defaults if present
 function signalCard(){
   const c = div("card"); c.id = "sigcard";
+  const isS3 = (DATASETS.find(x=>x.key===DATASET)||{}).kind === "s3";
+  const note = isS3
+    ? `<div class="ds-note">This recording is streamed from S3. The first channel load downloads the full EDF (~150–450 MB) to the server cache, so it can take several seconds; subsequent views are instant.</div>`
+    : "";
   c.innerHTML = `<h2>PSG signals <span class="hint">(server-downsampled; pick channels)</span></h2>
+    ${note}
     <div class="chrow" id="chrow"><span class="loading">loading channel list…</span></div>
     <div id="sigplots"></div>`;
   return c;
 }
 async function loadSignals(){
-  const d = await jget("/api/signals?bids="+encodeURIComponent(CURRENT)); // no ch -> returns labels + all? cap
+  const d = await jget(api("/api/signals", "bids="+encodeURIComponent(CURRENT))); // no ch -> labels only
   renderSignalCard(d);
 }
 async function fetchChannels(labels){
-  const key = labels.join("|");
+  const key = DATASET + "|" + labels.join("|");
   if(SIGCACHE[key]) return SIGCACHE[key];
-  const qs = labels.map(l=>"ch="+encodeURIComponent(l)).join("&");
-  const d = await jget(`/api/signals?bids=${encodeURIComponent(CURRENT)}&${qs}`);
+  const qs = "bids="+encodeURIComponent(CURRENT)+"&"+labels.map(l=>"ch="+encodeURIComponent(l)).join("&");
+  const d = await jget(api("/api/signals", qs));
   SIGCACHE[key] = d; return d;
 }
 function renderSignalCard(d){
@@ -623,6 +671,7 @@ function txt(x,y,s,attrs){ const t=svgEl("text",Object.assign({x,y},attrs||{}));
 
 async function boot(){
   try { GLOSSARY = await jget("/api/glossary"); } catch(e){ GLOSSARY = null; }
+  await loadDatasets();
   await loadPatients();
 }
 boot();

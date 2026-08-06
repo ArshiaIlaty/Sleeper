@@ -9,6 +9,56 @@ Legend: ✅ done & verified · 🔬 verified against data · 📌 needs follow-u
 
 ---
 
+## 2026-08-06 (large dataset) — Dual-cohort viewer + feature-CSV export
+
+Got access to the **large dataset** (6,600 demographics rows / 6,530 CAISR
+recordings, 1.36 TB of physio EDFs) in S3
+(`s3://els-thv-nlp-sbox-input-834843060358/physionet26/large-dataset`). Added it
+to the app alongside the standard cohort and built a feature-export tool.
+
+### Dataset source abstraction — `scripts/viewer/sources.py`
+One `Dataset` interface over two backends: **standard** = local FS; **large** =
+S3 via the **`aws` CLI** (chosen over boto3, which is only installed for the
+`ubuntu` account — the CLI works for every account through the instance role).
+Small files (demographics, CAISR EDFs) stream into memory via `aws s3 cp <key> -`;
+the big physio EDFs download to a **size-capped LRU cache** (`~/.cache/physio-viewer`,
+8 GB default) on first view. 🔬 Verified `arshia_ilaty_physio26` can reach S3 via
+the instance role and that `edfio` reads a CAISR EDF straight from a BytesIO S3
+stream.
+
+### Viewer — dataset selector + S3 signals
+`app.py` refactored so every data endpoint takes `?ds=standard|large`; added
+`/api/datasets`. `index.html` has a **Dataset dropdown** in the header that
+reloads the cohort; the signals panel shows a "streamed from S3 (first load
+downloads the EDF)" note for the large cohort.
+- 🔬 Verified end-to-end on pdmle: standard=1103 / large=6600 patients; large
+  CAISR+preprocess+dynamics computed from S3-streamed files; large signals
+  downloaded+cached in ~4.8 s first hit, **0.009 s cached**; channel trace
+  decimated from cache; standard cohort unchanged (regression clean).
+
+### Feature-CSV export — `scripts/viewer/export_features.py`
+Streams CAISR + demographics per recording → a **60-column** per-recording CSV
+for colleagues to train on: sleep macro-architecture (stage %, efficiency, WASO,
+latencies, entropy), fragmentation/transition dynamics, preprocessing deltas,
+event indices (AHI/arousal/PLMI + subtypes), demographics, and the label.
+Feature math mirrors `scripts/eda/stats_sleep.py` + `dynamics.py` +
+`preprocess.py` so the CSV matches the report/viewer. Only small CAISR files are
+read (never the 1.36 TB of waveforms); autonomic signal features stay in
+`team_code.py`. Resumable (`--resume`), pure stdlib+numpy+edfio (no pandas).
+- 🔬 **Standard CSV generated: 1090 rows × 60 cols** (13 no-CAISR skipped),
+  0 errors → `/data-temp/physio-viewer/exports/features_standard.csv`.
+- 📌 **Large CSV generating** (detached `setsid nohup` run on pdmle, ~1–2 h,
+  0 errors at launch) → `exports/features_large.csv`.
+- ⚠️ `exports/` lives on pdmle (data-derived, not committed to git).
+
+### Review + docs
+- A code review of the source/export diff informed the design (aws-CLI over
+  boto3; cache eviction; ds-race on signal cache key → keyed by dataset).
+- README + HOW_TO_RUN document dataset selection, S3 env vars, and the export
+  command; `sources.py`/`export_features.py` added to the files table.
+
+---
+
 ## 2026-08-06 — CAISR hypnogram preprocessing, raw-vs-clean tab, count heatmap, run guide
 
 Four viewer additions requested by the team.

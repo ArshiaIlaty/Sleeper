@@ -2,6 +2,12 @@
 
 An interactive, single-page web app to browse the dataset one patient at a time:
 
+- **Two cohorts, switchable in the header** — a **Standard (1,103)** release read
+  from local disk and a **Large (6,530)** release streamed from S3. Pick either in
+  the dataset dropdown; everything below re-loads for the chosen cohort. Small
+  files (demographics, CAISR annotations) stream from S3 via the `aws` CLI; the
+  large physiological EDFs are downloaded to a size-capped local cache on first
+  view (a "streamed from S3" note appears on the signals panel for that cohort).
 - **Demographics** panel (age, sex, race, BMI, follow-up fields, CI label)
 - **CAISR sleep staging** — hypnogram, stage-% bar, and event indices (AHI, arousal, PLMI, apnea/hypopnea/RERA)
 - **Raw vs. preprocessed staging** — the staging panel has **Compare / Raw /
@@ -42,10 +48,12 @@ frontend is one dependency-free `index.html` (vanilla JS + inline SVG).
 
 | File | Purpose |
 |---|---|
-| `app.py` | HTTP server + JSON API (`/api/patients`, `/api/demographics`, `/api/caisr`, `/api/dynamics`, `/api/signals`, `/api/glossary`, `/static/*`) |
+| `app.py` | HTTP server + JSON API (`/api/datasets`, `/api/patients`, `/api/demographics`, `/api/caisr`, `/api/dynamics`, `/api/signals`, `/api/glossary`, `/static/*`); all data endpoints take `?ds=standard|large` |
+| `sources.py` | Dataset abstraction: `standard` (local FS) and `large` (S3 via the `aws` CLI), with the size-capped LRU cache for large physio EDFs |
 | `glossary.py` | Plain-language definitions of every metric, stage, channel role, field, and dynamics stat + clinical reference ranges (drives the hover tooltips) |
 | `dynamics.py` | Per-patient stage-transition matrix + fragmentation stats, with an embedded cohort baseline (mirrors `scripts/eda/stats_transitions.py`) |
 | `preprocess.py` | CAISR hypnogram preprocessing — minimum-bout-duration smoothing that removes implausible single-epoch stage spikes (raw + cleaned staging) |
+| `export_features.py` | CLI: stream CAISR + demographics for a cohort → a wide per-recording feature CSV for model training (works on both datasets) |
 | `HOW_TO_RUN.md` | Step-by-step run/connect guide for the whole team (host vs. viewer, tmux, troubleshooting) |
 | `index.html` | Single-page UI (vanilla JS + SVG, validated Edwards palette, tooltip engine) |
 | `edwards_logo.png` | Header logo, served from `/static/` (no CDN) |
@@ -78,11 +86,35 @@ open http://127.0.0.1:8050
 
 ## Configuration
 
-- `PHYSIONET_DATA_ROOT` — dataset root (default `/data-temp/shared-physionet26-dataset/extracted`)
+- `PHYSIONET_DATA_ROOT` — standard (local) dataset root (default `/data-temp/shared-physionet26-dataset/extracted`)
+- `PHYSIONET_S3_BUCKET` / `PHYSIONET_S3_PREFIX` — large dataset location
+  (defaults `els-thv-nlp-sbox-input-834843060358` / `physionet26/large-dataset`)
+- `PHYSIO_CACHE_DIR` — where large-dataset EDFs are cached (default `~/.cache/physio-viewer/large`)
 - `PORT` / `HOST` — bind address (default `127.0.0.1:8050`)
 - `POINTS` in `app.py` — max points/channel sent to the browser (default 2500)
 - `CAISR_MIN_BOUT_EPOCHS` — minimum plausible stage-bout length for preprocessing
   (default `2` = 1 min; raise to smooth more aggressively, e.g. `3` = 90 s)
+
+## Feature export (for model training)
+
+`export_features.py` writes one wide row per recording — sleep macro-architecture
+(stage %, efficiency, WASO, latencies, entropy), fragmentation / transition
+dynamics, preprocessing deltas, event indices (AHI, arousal, PLMI + subtypes),
+demographics, and the `Cognitive_Impairment` label — to a CSV your colleagues can
+train on directly. Only the small CAISR annotation files are read (never the big
+waveforms), so it streams the whole large cohort in ~1–2 h.
+
+```bash
+# on pdmle, as arshia_ilaty_physio26:
+cd /data-temp/physio-viewer
+python3 export_features.py --dataset standard --out exports/features_standard.csv
+python3 export_features.py --dataset large    --out exports/features_large.csv --resume
+```
+
+`--resume` appends, skipping recordings already in the output (safe to re-run if
+interrupted). Signal-derived autonomic features (ECG-HRV, SpO₂) are intentionally
+out of scope here — the modeling code (`team_code.py`) computes those from the raw
+waveforms. Generated CSVs live in `/data-temp/physio-viewer/exports/` on pdmle.
 
 ## Notes
 

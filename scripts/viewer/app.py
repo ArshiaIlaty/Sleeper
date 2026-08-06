@@ -17,12 +17,9 @@ Then from your laptop:
 """
 import os
 import re
-import csv
 import json
-import glob
 import mimetypes
 import argparse
-import functools
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
@@ -32,14 +29,7 @@ import edfio
 from glossary import GLOSSARY
 from dynamics import patient_dynamics
 from preprocess import staging_report
-
-DATA_ROOT = os.environ.get(
-    "PHYSIONET_DATA_ROOT",
-    "/data-temp/shared-physionet26-dataset/extracted",
-)
-DEMO_CSV = os.path.join(DATA_ROOT, "demographics.csv")
-PHYSIO_DIR = os.path.join(DATA_ROOT, "physiological_data")
-CAISR_DIR = os.path.join(DATA_ROOT, "algorithmic_annotations")
+from sources import REGISTRY, DEFAULT_DATASET, get_dataset
 
 SITE_NAMES = {"S0001": "BIDMC", "I0002": "Emory", "I0006": "Kaiser"}
 STAGE_CODES = {1: "N3", 2: "N2", 3: "N1", 4: "REM", 5: "Wake", 9: "Unknown"}
@@ -80,38 +70,6 @@ _FILE_RE = re.compile(r"sub-([A-Za-z0-9]+)_ses-(\d+)")
 
 
 # --------------------------------------------------------------------------- data
-@functools.lru_cache(maxsize=1)
-def _demographics():
-    """List of patient dicts + an index by bids_folder."""
-    rows = []
-    with open(DEMO_CSV) as fh:
-        for r in csv.DictReader(fh):
-            rows.append(r)
-    return rows
-
-
-def _find_edf(base_dir, site, bids, sess, suffix=""):
-    """Locate an EDF for (bids, sess) under base_dir/site, tolerant of ses zero-pad."""
-    pid = bids.replace("sub-", "")
-    folder = os.path.join(base_dir, site)
-    cands = [
-        os.path.join(folder, f"sub-{pid}_ses-{sess}{suffix}.edf"),
-        os.path.join(folder, f"sub-{pid}_ses-{int(sess):02d}{suffix}.edf"),
-    ]
-    for c in cands:
-        if os.path.exists(c):
-            return c
-    hits = sorted(glob.glob(os.path.join(folder, f"sub-{pid}_ses-*{suffix}.edf")))
-    return hits[0] if hits else None
-
-
-def _patient_record(bids):
-    for r in _demographics():
-        if r.get("BidsFolder") == bids:
-            return r
-    return None
-
-
 def _decimate(arr, n_out):
     """Downsample by min/max envelope so spikes survive; returns (x_idx, y)."""
     arr = np.asarray(arr, float)
@@ -137,9 +95,21 @@ def _decimate(arr, n_out):
     return np.array(xs), ys
 
 
-def api_patients():
+def api_datasets():
+    """List available cohorts for the dataset selector."""
+    return {
+        "datasets": [
+            {"key": d.key, "label": d.label, "description": d.description,
+             "kind": d.kind, "has_signals": True}
+            for d in REGISTRY.values()
+        ],
+        "default": DEFAULT_DATASET,
+    }
+
+
+def api_patients(ds):
     out = []
-    for r in _demographics():
+    for r in ds.demographics():
         site = r.get("SiteID", "")
         out.append({
             "bids": r.get("BidsFolder", ""),
@@ -150,11 +120,11 @@ def api_patients():
             "label": r.get("Cognitive_Impairment", ""),
         })
     out.sort(key=lambda d: d["bids"])
-    return {"patients": out, "n": len(out)}
+    return {"patients": out, "n": len(out), "dataset": ds.key}
 
 
-def api_demographics(bids):
-    r = _patient_record(bids)
+def api_demographics(ds, bids):
+    r = ds.record(bids)
     if not r:
         return {"error": f"unknown patient {bids}"}
     site = r.get("SiteID", "")
@@ -162,19 +132,19 @@ def api_demographics(bids):
               "Time_to_Event", "Time_to_Last_Visit", "SessionID", "CreationTime"]
     return {
         "bids": bids, "site": site, "site_name": SITE_NAMES.get(site, site),
+        "dataset": ds.key,
         "fields": {f: (r.get(f, "") or "—") for f in fields},
     }
 
 
-def api_caisr(bids):
-    r = _patient_record(bids)
+def api_caisr(ds, bids):
+    r = ds.record(bids)
     if not r:
         return {"error": "unknown patient"}
     site, sess = r.get("SiteID", ""), r.get("SessionID", "1")
-    f = _find_edf(CAISR_DIR, site, bids, sess, "_caisr_annotations")
-    if not f:
+    edf = ds.open_caisr(site, bids, sess)
+    if edf is None:
         return {"error": "no CAISR annotation file for this patient"}
-    edf = edfio.read_edf(f, lazy_load_data=False)
     chans = {s.label.strip(): np.asarray(s.data, float) for s in edf.signals}
     fs_of = {s.label.strip(): float(s.sampling_frequency) for s in edf.signals}
 
@@ -204,7 +174,7 @@ def api_caisr(bids):
     for code, nm in RESP_CODES.items():
         indices[nm + " (/h)"] = rate(resp, [code], fs_of.get("resp_caisr"))
 
-    out = {"bids": bids, "indices": indices}
+    out = {"bids": bids, "dataset": ds.key, "indices": indices}
     if staging is not None:
         # raw view keeps the original field names for backward compatibility;
         # the cleaned view + change summary are added alongside.
@@ -222,18 +192,17 @@ def api_caisr(bids):
     return out
 
 
-def api_dynamics(bids):
+def api_dynamics(ds, bids):
     """Per-patient sleep-stage dynamics report: the epoch-to-epoch transition
     matrix + fragmentation/spike statistics, each paired with the cohort mean.
     Reads only the small CAISR stage channel."""
-    r = _patient_record(bids)
+    r = ds.record(bids)
     if not r:
         return {"error": "unknown patient"}
     site, sess = r.get("SiteID", ""), r.get("SessionID", "1")
-    f = _find_edf(CAISR_DIR, site, bids, sess, "_caisr_annotations")
-    if not f:
+    edf = ds.open_caisr(site, bids, sess)
+    if edf is None:
         return {"error": "no CAISR annotation file for this patient"}
-    edf = edfio.read_edf(f, lazy_load_data=False)
     stage = None
     for s in edf.signals:
         if s.label.strip() == "stage_caisr":
@@ -241,15 +210,19 @@ def api_dynamics(bids):
             break
     out = patient_dynamics(stage)
     out["bids"] = bids
+    out["dataset"] = ds.key
     return out
 
 
-def api_signals(bids, want=None):
-    r = _patient_record(bids)
+def api_signals(ds, bids, want=None):
+    r = ds.record(bids)
     if not r:
         return {"error": "unknown patient"}
     site, sess = r.get("SiteID", ""), r.get("SessionID", "1")
-    f = _find_edf(PHYSIO_DIR, site, bids, sess)
+    try:
+        f = ds.physio_path(site, bids, sess)
+    except Exception as e:
+        return {"error": f"could not fetch signal file from source: {e}"}
     if not f:
         return {"error": "no physiological EDF for this patient"}
     edf = edfio.read_edf(f, lazy_load_data=True)
@@ -259,7 +232,7 @@ def api_signals(bids, want=None):
     if want is None:
         # No channels requested: return the montage (labels) only — header-only,
         # so we never decimate 16 channels of sample data just to populate chips.
-        return {"bids": bids, "duration_s": round(duration, 1),
+        return {"bids": bids, "dataset": ds.key, "duration_s": round(duration, 1),
                 "all_labels": labels, "roles": roles, "series": []}
     want_l = [w.strip().lower() for w in want]
     result_labels = [l for l in labels if l.lower() in want_l]
@@ -276,7 +249,7 @@ def api_signals(bids, want=None):
         series.append({"label": lab, "fs": fs, "role": channel_role(lab),
                        "unit": str(getattr(s, "physical_dimension", "") or "").strip(),
                        "t": [round(x, 3) for x in t], "y": ys})
-    return {"bids": bids, "duration_s": round(duration, 1),
+    return {"bids": bids, "dataset": ds.key, "duration_s": round(duration, 1),
             "all_labels": labels, "roles": roles, "series": series}
 
 
@@ -319,20 +292,23 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(INDEX_HTML, ctype="text/html; charset=utf-8")
             if u.path == "/api/glossary":
                 return self._send(GLOSSARY)
+            if u.path == "/api/datasets":
+                return self._send(api_datasets())
             if u.path.startswith("/static/"):
                 return self._send_static(u.path[len("/static/"):])
+            ds = get_dataset(q.get("ds", [DEFAULT_DATASET])[0])
             if u.path == "/api/patients":
-                return self._send(api_patients())
+                return self._send(api_patients(ds))
             bids = (q.get("bids", [None])[0])
             if u.path == "/api/demographics":
-                return self._send(api_demographics(bids))
+                return self._send(api_demographics(ds, bids))
             if u.path == "/api/caisr":
-                return self._send(api_caisr(bids))
+                return self._send(api_caisr(ds, bids))
             if u.path == "/api/dynamics":
-                return self._send(api_dynamics(bids))
+                return self._send(api_dynamics(ds, bids))
             if u.path == "/api/signals":
                 want = q.get("ch")
-                return self._send(api_signals(bids, want))
+                return self._send(api_signals(ds, bids, want))
             return self._send({"error": "not found"}, code=404)
         except Exception as e:  # never 500 silently — report to the UI
             return self._send({"error": f"{type(e).__name__}: {e}"}, code=500)
@@ -354,9 +330,12 @@ def main():
     ap.add_argument("--port", type=int, default=8050)
     args = ap.parse_args()
     _load_html()
-    # warm the demographics cache and report cohort size
-    n = api_patients()["n"]
-    print(f"Loaded {n} patients from {DEMO_CSV}")
+    # warm the default (local) demographics cache and report cohort size; the
+    # large (S3) dataset is loaded lazily on first request.
+    std = get_dataset(DEFAULT_DATASET)
+    n = api_patients(std)["n"]
+    print(f"Loaded {n} patients from the {std.label} dataset ({std.root})")
+    print(f"Datasets available: {', '.join(d.label for d in REGISTRY.values())}")
     srv = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"Serving on http://{args.host}:{args.port}  (Ctrl-C to stop)")
     try:

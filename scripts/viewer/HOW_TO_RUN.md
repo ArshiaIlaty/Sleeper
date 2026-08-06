@@ -81,6 +81,34 @@ ssh -L 8050:127.0.0.1:8050 your_account@AWOR-PDMLEAPP01 \
 
 ---
 
+## Choosing a dataset
+
+Once the page is open, use the **Dataset** dropdown in the top-right to switch
+between:
+
+- **Standard (1,103)** — the main challenge release, read from local disk (fast).
+- **Large (6,530)** — the extended release, streamed from S3. Demographics,
+  staging, dynamics, and preprocessing are instant (small files); the raw PSG
+  signals tab downloads that patient's full EDF (~150–450 MB) to a server cache
+  on first view, so the first channel load takes a few seconds and later ones are
+  instant. A note on the signals panel reminds you of this.
+
+## Exporting a feature CSV (for training a model)
+
+To produce the per-recording feature table your teammates can train on:
+
+```bash
+# on pdmle, as arshia_ilaty_physio26:
+cd /data-temp/physio-viewer
+python3 export_features.py --dataset standard --out exports/features_standard.csv
+python3 export_features.py --dataset large    --out exports/features_large.csv --resume
+```
+
+Output lands in `/data-temp/physio-viewer/exports/`. The large export takes
+~1–2 h (it streams 6,530 small CAISR files); run it inside `tmux` and pass
+`--resume` so an interrupted run picks up where it left off. See `README.md` →
+"Feature export" for the column list.
+
 ## Troubleshooting
 
 | Symptom | Cause & fix |
