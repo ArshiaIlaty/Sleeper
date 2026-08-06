@@ -27,7 +27,7 @@ An interactive, single-page web app to browse the dataset one patient at a time:
   number is shown against the cohort mean and flagged **red** when the patient is
   worse than average. Computed on demand in `dynamics.py` (same algorithm as the
   cohort EDA `stats_transitions.py`).
-- **PSG signals** — pick any channels; the server downsamples each to ~2500 points before sending, so the 170 MB EDFs never hit the browser
+- **PSG signals** — pick any channels; the server downsamples each to ~2500 points before sending, so the 170 MB EDFs never hit the browser. **Drag left-right on any plot to zoom into a time window** — the server re-samples just that window (at full/near-raw resolution when short enough), so spikes and beat-to-beat morphology become visible; double-click or **Reset** returns to the whole night, **Zoom out** widens 2×. A hover crosshair shows the time at the cursor. Each plot is fully framed with min/mid/max y-ticks.
 - **Hover explanations** — every event index, sleep stage, channel, and
   demographic field shows a plain-language tooltip on hover (or keyboard focus).
   Definitions live in `glossary.py` (one source of truth), served at
@@ -48,7 +48,7 @@ frontend is one dependency-free `index.html` (vanilla JS + inline SVG).
 
 | File | Purpose |
 |---|---|
-| `app.py` | HTTP server + JSON API (`/api/datasets`, `/api/patients`, `/api/demographics`, `/api/caisr`, `/api/dynamics`, `/api/signals`, `/api/glossary`, `/static/*`); all data endpoints take `?ds=standard|large` |
+| `app.py` | HTTP server + JSON API (`/api/datasets`, `/api/patients`, `/api/demographics`, `/api/caisr`, `/api/dynamics`, `/api/signals`, `/api/glossary`, `/static/*`); all data endpoints take `?ds=standard|large`; `/api/signals` also takes `t0`/`t1` (seconds) to zoom a window at full resolution |
 | `sources.py` | Dataset abstraction: `standard` (local FS) and `large` (S3 via the `aws` CLI), with the size-capped LRU cache for large physio EDFs |
 | `glossary.py` | Plain-language definitions of every metric, stage, channel role, field, and dynamics stat + clinical reference ranges (drives the hover tooltips) |
 | `dynamics.py` | Per-patient stage-transition matrix + fragmentation stats, with an embedded cohort baseline (mirrors `scripts/eda/stats_transitions.py`) |

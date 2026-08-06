@@ -77,7 +77,8 @@
   .banner .pill{display:inline-block;background:var(--blue);color:#fff;border-radius:10px;
                 padding:1px 8px;font-weight:700;font-size:11px;margin-right:4px;}
   .hyp-label{font-size:11px;font-weight:700;color:var(--ink2);text-transform:uppercase;
-             letter-spacing:.03em;margin:6px 0 -4px;}
+             letter-spacing:.03em;margin:14px 0 8px;}
+  .hyp-label:first-child{margin-top:2px;}
   .hyp-label.clean{color:var(--blue);}
   /* value-vs-cohort dynamics tiles */
   .dyn-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(158px,1fr));gap:10px;}
@@ -117,6 +118,21 @@
   svg{display:block;width:100%;}
   .axis-label{font-size:10px;fill:var(--muted);}
   .sig-label{font-size:11px;font-weight:700;fill:var(--ink);}
+  /* PSG signal plots + zoom */
+  .sigwrap{position:relative;margin-bottom:6px;}
+  .sigwrap svg{cursor:crosshair;}
+  .sig-frame{fill:none;stroke:var(--axis);stroke-width:1;}
+  .sig-brush{fill:rgba(33,101,160,.14);stroke:var(--blue);stroke-width:1;stroke-dasharray:3 2;}
+  .sig-cross{stroke:var(--red);stroke-width:1;}
+  .sig-readout{font-size:10px;fill:var(--red);font-weight:700;}
+  .sigbar{display:flex;align-items:center;gap:12px;margin:2px 0 10px;flex-wrap:wrap;}
+  .sigbar .win{font-size:12px;color:var(--ink2);font-variant-numeric:tabular-nums;}
+  .sigbar button{font-size:12px;font-weight:700;padding:4px 12px;border-radius:6px;
+                 border:1px solid var(--axis);background:var(--panel);color:var(--blue);
+                 cursor:pointer;font-family:inherit;}
+  .sigbar button:hover{background:#f0f6fd;}
+  .sigbar button:disabled{color:var(--muted);cursor:default;background:var(--panel);}
+  .sigbar .zhint{font-size:11px;color:var(--muted);}
   .loading{color:var(--muted);font-size:13px;padding:10px 0;}
   .err{color:var(--red);font-size:13px;padding:8px 0;font-weight:600;}
   .hint{color:var(--muted);font-size:12px;margin-top:4px;}
@@ -557,6 +573,9 @@ function hypnogramSVG(hyp, ghost){
   const ymap = {4:"Wake",3:"REM",2:"N1",1:"N2",0:"N3"};
   const x = t => padL + (t/tmax)*(W-padL-padR);
   const y = v => padT + (4-v)/4*(H-padT-padB);
+  // enclosing frame so the trace's start/end are clearly bounded
+  svg.appendChild(svgEl("rect",{x:padL,y:padT,width:W-padL-padR,height:H-padT-padB,
+    fill:"none",stroke:"var(--axis)","stroke-width":1}));
   // gridlines + stage labels
   for(let v=0; v<=4; v++){
     svg.appendChild(svgEl("line",{x1:padL,x2:W-padR,y1:y(v),y2:y(v),stroke:"var(--grid)","stroke-width":1}));
@@ -588,28 +607,66 @@ function hypnogramSVG(hyp, ghost){
 
 // ---- signals ----
 let SELECTED_CH = ["C4-M1","EKG","SaO2","stage"]; // defaults if present
+let SIG_DUR = null;        // full recording duration (s)
+let SIG_WIN = null;        // current zoom window [t0,t1] in s, or null = full night
 function signalCard(){
   const c = div("card"); c.id = "sigcard";
   const isS3 = (DATASETS.find(x=>x.key===DATASET)||{}).kind === "s3";
   const note = isS3
     ? `<div class="ds-note">This recording is streamed from S3. The first channel load downloads the full EDF (~150–450 MB) to the server cache, so it can take several seconds; subsequent views are instant.</div>`
     : "";
-  c.innerHTML = `<h2>PSG signals <span class="hint">(server-downsampled; pick channels)</span></h2>
+  c.innerHTML = `<h2>PSG signals <span class="hint">(drag on a plot to zoom in; server re-samples the window at full detail)</span></h2>
     ${note}
     <div class="chrow" id="chrow"><span class="loading">loading channel list…</span></div>
+    <div class="sigbar" id="sigbar" style="display:none">
+      <span class="win" id="sigwin"></span>
+      <button id="zoutBtn" title="Zoom out 2×">– Zoom out</button>
+      <button id="zresetBtn" title="Show the whole night">Reset</button>
+      <span class="zhint">drag left-right on any plot to zoom · double-click to reset</span>
+    </div>
     <div id="sigplots"></div>`;
   return c;
 }
 async function loadSignals(){
+  SIG_WIN = null;
   const d = await jget(api("/api/signals", "bids="+encodeURIComponent(CURRENT))); // no ch -> labels only
+  SIG_DUR = d.duration_s || null;
   renderSignalCard(d);
 }
 async function fetchChannels(labels){
-  const key = DATASET + "|" + labels.join("|");
+  // cache key includes the zoom window so panning/zooming caches independently
+  const winKey = SIG_WIN ? `${SIG_WIN[0].toFixed(1)}-${SIG_WIN[1].toFixed(1)}` : "full";
+  const key = DATASET + "|" + winKey + "|" + labels.join("|");
   if(SIGCACHE[key]) return SIGCACHE[key];
-  const qs = "bids="+encodeURIComponent(CURRENT)+"&"+labels.map(l=>"ch="+encodeURIComponent(l)).join("&");
+  let qs = "bids="+encodeURIComponent(CURRENT)+"&"+labels.map(l=>"ch="+encodeURIComponent(l)).join("&");
+  if(SIG_WIN) qs += `&t0=${SIG_WIN[0]}&t1=${SIG_WIN[1]}`;
   const d = await jget(api("/api/signals", qs));
   SIGCACHE[key] = d; return d;
+}
+// apply a new zoom window (clamped) and redraw
+function setSigWindow(t0, t1){
+  if(SIG_DUR==null) return;
+  let a = Math.max(0, Math.min(t0, t1)), b = Math.min(SIG_DUR, Math.max(t0, t1));
+  if(b - a < 0.5) return;                         // ignore trivial drags
+  SIG_WIN = (a<=0 && b>=SIG_DUR) ? null : [Math.round(a*100)/100, Math.round(b*100)/100];
+  drawSelected();
+}
+function zoomOut(){
+  if(!SIG_WIN){ return; }
+  const [a,b] = SIG_WIN, span = b-a, c = (a+b)/2;
+  setSigWindow(c - span, c + span);               // 2× wider
+}
+function resetZoom(){ SIG_WIN = null; drawSelected(); }
+function fmtDur(s){ if(s>=3600) return (s/3600).toFixed(2)+" h"; if(s>=60) return (s/60).toFixed(1)+" min"; return s.toFixed(1)+" s"; }
+function updateSigBar(){
+  const bar = $("#sigbar"); if(!bar) return;
+  bar.style.display = "flex";
+  const win = SIG_WIN || [0, SIG_DUR||0];
+  $("#sigwin").innerHTML = SIG_WIN
+    ? `Window <b>${fmtDur(win[0])} → ${fmtDur(win[1])}</b> (${fmtDur(win[1]-win[0])})`
+    : `Whole night (${fmtDur(SIG_DUR||0)})`;
+  $("#zoutBtn").disabled = !SIG_WIN;
+  $("#zresetBtn").disabled = !SIG_WIN;
 }
 function renderSignalCard(d){
   const row = $("#chrow"); if(!row) return;
@@ -631,36 +688,114 @@ function renderSignalCard(d){
     chip.onclick = () => { chip.classList.toggle("on"); drawSelected(); };
     row.appendChild(chip);
   }
+  const zo = $("#zoutBtn"), zr = $("#zresetBtn");
+  if(zo) zo.onclick = zoomOut;
+  if(zr) zr.onclick = resetZoom;
   drawSelected();
 }
 async function drawSelected(){
   const on = [...document.querySelectorAll("#chrow .chip.on")].map(c=>c.dataset.ch);
   const box = $("#sigplots");
-  if(!on.length){ box.innerHTML = `<div class="hint">Select one or more channels above.</div>`; return; }
+  if(!on.length){ box.innerHTML = `<div class="hint">Select one or more channels above.</div>`;
+    const bar=$("#sigbar"); if(bar) bar.style.display="none"; return; }
   box.innerHTML = `<div class="loading">loading ${on.length} channel(s)…</div>`;
   const d = await fetchChannels(on);
   if(d.error){ box.innerHTML = `<div class="err">${d.error}</div>`; return; }
   box.innerHTML = "";
-  for(const s of d.series) box.appendChild(signalSVG(s, d.duration_s));
+  // window spanning the returned data (server clamps t0/t1 to the recording)
+  const w0 = d.window ? d.window[0] : 0;
+  const w1 = d.window ? d.window[1] : (d.duration_s || SIG_DUR || 1);
+  for(const s of d.series) box.appendChild(signalSVG(s, w0, w1));
+  updateSigBar();
 }
-function signalSVG(s, dur){
-  const W=900, H=90, padL=52, padR=12, padT=8, padB=18;
-  const wrap = div("");
+// One channel plot: full frame, y min/mid/max ticks, drag-to-zoom, hover crosshair.
+function signalSVG(s, w0, w1){
+  const W=900, H=110, padL=56, padR=14, padT=14, padB=22;
+  const wrap = div("sigwrap");
   const svg = svgEl("svg",{viewBox:`0 0 ${W} ${H}`});
+  const plotW = W-padL-padR, plotH = H-padT-padB;
   const ys = s.y.filter(v=>v!=null && isFinite(v));
-  if(!ys.length){ svg.appendChild(txt(padL, H/2, s.label+" (no data)", {class:"sig-label"})); wrap.appendChild(svg); return wrap; }
+  if(!ys.length){ svg.appendChild(txt(padL, H/2, s.label+" (no data in window)", {class:"sig-label"})); wrap.appendChild(svg); return wrap; }
   let mn=Math.min(...ys), mx=Math.max(...ys); if(mn===mx){mx=mn+1;}
-  const tmax = s.t.length? s.t[s.t.length-1] : dur;
-  const X = t => padL + (t/tmax)*(W-padL-padR);
-  const Y = v => padT + (1-(v-mn)/(mx-mn))*(H-padT-padB);
+  const pad=(mx-mn)*0.06; mn-=pad; mx+=pad;                 // headroom so peaks aren't clipped
+  const t0=w0, t1=(w1>w0?w1:w0+1);
+  const X = t => padL + ((t-t0)/(t1-t0))*plotW;
+  const Y = v => padT + (1-(v-mn)/(mx-mn))*plotH;
+  // frame
+  svg.appendChild(svgEl("rect",{x:padL,y:padT,width:plotW,height:plotH,class:"sig-frame"}));
+  // y ticks: min / mid / max
+  [mn,(mn+mx)/2,mx].forEach(v=>{
+    svg.appendChild(svgEl("line",{x1:padL-3,x2:padL,y1:Y(v),y2:Y(v),stroke:"var(--axis)","stroke-width":1}));
+    svg.appendChild(txt(padL-6, Y(v)+3, v.toFixed(mx-mn<10?2:0), {"text-anchor":"end", class:"axis-label"}));
+  });
+  // waveform (clip to frame so nothing spills past the right edge)
   let dpath=""; let started=false;
   for(let i=0;i<s.t.length;i++){ const v=s.y[i]; if(v==null||!isFinite(v)){started=false;continue;}
     const px=X(s.t[i]), py=Y(v); dpath += (started?` L${px},${py}`:`M${px},${py}`); started=true; }
-  svg.appendChild(svgEl("line",{x1:padL,x2:W-padR,y1:H-padB,y2:H-padB,stroke:"var(--grid)","stroke-width":1}));
-  svg.appendChild(svgEl("path",{d:dpath, fill:"none", stroke:"var(--blue)","stroke-width":1}));
-  svg.appendChild(txt(padL, padT+2, `${s.label}`, {class:"sig-label"}));
-  svg.appendChild(txt(padL, H-4, `${mn.toFixed(1)}–${mx.toFixed(1)} ${s.unit||''} · ${s.fs}Hz`, {class:"axis-label"}));
+  svg.appendChild(svgEl("path",{d:dpath, fill:"none", stroke:"var(--blue)","stroke-width":1.1}));
+  // labels
+  svg.appendChild(txt(padL, padT-4, `${s.label}`, {class:"sig-label"}));
+  svg.appendChild(txt(W-padR, padT-4, `${mn.toFixed(1)}–${mx.toFixed(1)} ${s.unit||''} · ${s.fs}Hz`, {"text-anchor":"end", class:"axis-label"}));
+  // x ticks (a few time marks across the window)
+  const xt = niceTicks(t0, t1, 5);
+  for(const tv of xt){ svg.appendChild(txt(X(tv), H-6, fmtClock(tv), {"text-anchor":"middle", class:"axis-label"})); }
+
+  attachZoom(svg, {padL, padT, plotW, plotH, t0, t1, X});
   wrap.appendChild(svg); return wrap;
+}
+function fmtClock(s){ const m=Math.floor(s/60), sec=Math.round(s%60);
+  return (s>=60) ? `${m}:${String(sec).padStart(2,'0')}` : `${s.toFixed(s<10?1:0)}s`; }
+function niceTicks(a,b,n){ const step=(b-a)/n, out=[]; for(let i=0;i<=n;i++) out.push(a+step*i); return out; }
+// drag-to-zoom brush + hover crosshair on a signal plot. A single module-level
+// drag state + one persistent window mouseup handler (installed once) avoids
+// leaking a listener on every redraw.
+let SIG_DRAG = null;   // {svg, g, startClient, startX, brush}
+function _sigToT(svg, g, clientX){
+  const r = svg.getBoundingClientRect();
+  const vx = (clientX - r.left) / r.width * 900;             // viewBox is 0..900
+  const frac = (vx - g.padL) / g.plotW;
+  return g.t0 + Math.max(0, Math.min(1, frac)) * (g.t1 - g.t0);
+}
+function _sigClampX(svg, g, clientX){
+  const r = svg.getBoundingClientRect();
+  const vx = (clientX - r.left) / r.width * 900;
+  return Math.max(g.padL, Math.min(g.padL+g.plotW, vx));
+}
+if(!window.__sigZoomInit){
+  window.__sigZoomInit = true;
+  window.addEventListener("mouseup", e=>{
+    if(!SIG_DRAG) return;
+    const {svg, g, startClient, brush} = SIG_DRAG;
+    const a=_sigToT(svg,g,startClient), b=_sigToT(svg,g,e.clientX);
+    if(brush && brush.parentNode) brush.parentNode.removeChild(brush);
+    SIG_DRAG = null;
+    if(Math.abs(b-a) > 0.4) setSigWindow(a,b);                // real drag -> zoom
+  });
+}
+function attachZoom(svg, g){
+  const cross = svgEl("line",{class:"sig-cross",y1:g.padT,y2:g.padT+g.plotH,x1:g.padL,x2:g.padL});
+  cross.style.display="none";
+  const readout = txt(g.padL+2, g.padT+10, "", {class:"sig-readout"}); readout.style.display="none";
+  svg.appendChild(cross); svg.appendChild(readout);
+  svg.addEventListener("mousemove", e=>{
+    const vx = _sigClampX(svg,g,e.clientX);
+    cross.style.display=""; readout.style.display="";
+    cross.setAttribute("x1",vx); cross.setAttribute("x2",vx);
+    const tv = _sigToT(svg,g,e.clientX); readout.setAttribute("x", vx+4>860? vx-4:vx+4);
+    readout.setAttribute("text-anchor", vx+4>860?"end":"start");
+    readout.textContent = fmtClock(tv);
+    if(SIG_DRAG && SIG_DRAG.svg===svg){ const x0=Math.min(SIG_DRAG.startX,vx), w=Math.abs(vx-SIG_DRAG.startX);
+      SIG_DRAG.brush.setAttribute("x",x0); SIG_DRAG.brush.setAttribute("width",w); }
+  });
+  svg.addEventListener("mouseleave", ()=>{ cross.style.display="none"; readout.style.display="none"; });
+  svg.addEventListener("mousedown", e=>{
+    const startX=_sigClampX(svg,g,e.clientX);
+    const brush=svgEl("rect",{class:"sig-brush",x:startX,y:g.padT,width:0,height:g.plotH});
+    svg.appendChild(brush);
+    SIG_DRAG = {svg, g, startClient:e.clientX, startX, brush};
+    e.preventDefault();
+  });
+  svg.addEventListener("dblclick", ()=> resetZoom());
 }
 
 // ---- svg helpers ----

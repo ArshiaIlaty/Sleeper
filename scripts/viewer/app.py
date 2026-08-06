@@ -75,7 +75,9 @@ def _decimate(arr, n_out):
     arr = np.asarray(arr, float)
     n = arr.size
     if n <= n_out:
-        return np.arange(n), arr
+        # already small enough: return every sample (as JSON-safe floats/None)
+        ys = [float(v) if np.isfinite(v) else None for v in arr]
+        return np.arange(n), ys
     # bucket into n_out/2 windows, keep min & max of each -> preserves morphology
     buckets = max(1, n_out // 2)
     edges = np.linspace(0, n, buckets + 1, dtype=int)
@@ -88,7 +90,9 @@ def _decimate(arr, n_out):
         finite = seg[np.isfinite(seg)]
         if finite.size == 0:
             xs.append(a); ys.append(None); continue
-        imn = a + int(np.argmin(seg)); imx = a + int(np.argmax(seg))
+        # nan-aware argmin/argmax: plain argmin/argmax return a NaN's index when
+        # a bucket has any NaN, which would emit NaN (invalid JSON) into the trace.
+        imn = a + int(np.nanargmin(seg)); imx = a + int(np.nanargmax(seg))
         lo, hi = (imn, imx) if imn < imx else (imx, imn)
         xs.append(lo); ys.append(float(arr[lo]))
         xs.append(hi); ys.append(float(arr[hi]))
@@ -214,7 +218,7 @@ def api_dynamics(ds, bids):
     return out
 
 
-def api_signals(ds, bids, want=None):
+def api_signals(ds, bids, want=None, t0=None, t1=None):
     r = ds.record(bids)
     if not r:
         return {"error": "unknown patient"}
@@ -237,20 +241,48 @@ def api_signals(ds, bids, want=None):
     want_l = [w.strip().lower() for w in want]
     result_labels = [l for l in labels if l.lower() in want_l]
 
+    # Optional zoom window [t0, t1] in seconds. When given, we slice each channel
+    # to that window BEFORE decimating, so a short window shows near-raw detail
+    # (spikes survive) instead of the whole-night envelope.
+    win = None
+    if t0 is not None and t1 is not None:
+        try:
+            a, b = float(t0), float(t1)
+            # clamp both ends to [0, duration] FIRST, then require a real span,
+            # so an out-of-range or reversed request can't yield win[0] > win[1].
+            a = min(max(0.0, a), duration)
+            b = min(max(0.0, b), duration)
+            if b - a > 1e-6:
+                win = (a, b)
+        except (TypeError, ValueError):
+            win = None
+
     series = []
     for s in edf.signals:
         lab = s.label.strip()
         if lab not in result_labels:
             continue
-        data = np.asarray(s.data, float)  # loads THIS channel only
-        xi, ys = _decimate(data, POINTS)
         fs = float(s.sampling_frequency)
-        t = (xi / fs).tolist() if fs else xi.tolist()
+        data = np.asarray(s.data, float)  # loads THIS channel only
+        t_off = 0.0
+        if win and fs:
+            i0 = int(np.floor(win[0] * fs))
+            i1 = int(np.ceil(win[1] * fs))
+            i0 = max(0, min(i0, data.size))
+            i1 = max(i0 + 1, min(i1, data.size))
+            data = data[i0:i1]
+            t_off = i0 / fs
+        xi, ys = _decimate(data, POINTS)
+        t = (xi / fs + t_off).tolist() if fs else xi.tolist()
         series.append({"label": lab, "fs": fs, "role": channel_role(lab),
                        "unit": str(getattr(s, "physical_dimension", "") or "").strip(),
+                       "n_samples": int(data.size),
                        "t": [round(x, 3) for x in t], "y": ys})
-    return {"bids": bids, "dataset": ds.key, "duration_s": round(duration, 1),
-            "all_labels": labels, "roles": roles, "series": series}
+    out = {"bids": bids, "dataset": ds.key, "duration_s": round(duration, 1),
+           "all_labels": labels, "roles": roles, "series": series}
+    if win:
+        out["window"] = [round(win[0], 3), round(win[1], 3)]
+    return out
 
 
 # --------------------------------------------------------------------------- http
@@ -308,7 +340,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(api_dynamics(ds, bids))
             if u.path == "/api/signals":
                 want = q.get("ch")
-                return self._send(api_signals(ds, bids, want))
+                t0 = q.get("t0", [None])[0]
+                t1 = q.get("t1", [None])[0]
+                return self._send(api_signals(ds, bids, want, t0, t1))
             return self._send({"error": "not found"}, code=404)
         except Exception as e:  # never 500 silently — report to the UI
             return self._send({"error": f"{type(e).__name__}: {e}"}, code=500)

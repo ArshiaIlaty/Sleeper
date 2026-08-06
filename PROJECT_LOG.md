@@ -9,6 +9,35 @@ Legend: ✅ done & verified · 🔬 verified against data · 📌 needs follow-u
 
 ---
 
+## 2026-08-06 (UI polish) — Signal zoom, plot framing, hypnogram-label fix
+
+Three UI fixes reported after using the app.
+
+### PSG signal zoom (drag-to-zoom, server re-samples the window)
+`/api/signals` now accepts `t0`/`t1` (seconds); each channel is sliced to that
+sample window BEFORE decimating, so a short window returns full/near-raw
+resolution instead of the whole-night min/max envelope. Frontend: **drag
+left-right on any plot to zoom**, double-click / Reset to whole night, Zoom out
+2×, a window readout, and a hover crosshair showing the cursor time.
+- 🔬 Verified on real data: full-night EKG = 12.3 s/point (spikes invisible);
+  100 s window = 0.04 s/point (~300× finer); 10 s window = 2000 pts (every
+  sample); 2 s window = 400 pts (fully raw). Works for the S3 (large) cohort too.
+- 🐞 Caught + fixed a bug: `_decimate`'s small-array branch returned a numpy
+  array (not JSON-serialisable) → 500 on windows ≤2500 samples. Now returns a
+  plain float/None list.
+
+### Plot framing ("shape/curve cut off at the edge")
+Signal plots now draw a full rectangle frame with min/mid/max y-ticks and x-time
+ticks (were a lone bottom gridline, so the trace looked unbounded at the right).
+The hypnogram got an enclosing frame too.
+
+### Hypnogram-label overlap (Compare tab)
+The "Raw (as scored by CAISR)" / "Preprocessed (spikes removed)" labels overlaid
+the Wake segment of the stage-% bar — caused by a negative bottom margin on
+`.hyp-label`. Fixed the margins so labels sit cleanly above each bar.
+
+---
+
 ## 2026-08-06 (large dataset) — Dual-cohort viewer + feature-CSV export
 
 Got access to the **large dataset** (6,600 demographics rows / 6,530 CAISR
