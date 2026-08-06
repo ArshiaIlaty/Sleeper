@@ -124,7 +124,8 @@
   .sig-frame{fill:none;stroke:var(--axis);stroke-width:1;}
   .sig-brush{fill:rgba(33,101,160,.14);stroke:var(--blue);stroke-width:1;stroke-dasharray:3 2;}
   .sig-cross{stroke:var(--red);stroke-width:1;}
-  .sig-readout{font-size:10px;fill:var(--red);font-weight:700;}
+  .sig-dot{fill:var(--red);stroke:#fff;stroke-width:1;}
+  .sig-readout{font-size:10px;fill:var(--red);font-weight:700;paint-order:stroke;stroke:#fff;stroke-width:2.5;}
   .sigbar{display:flex;align-items:center;gap:12px;margin:2px 0 10px;flex-wrap:wrap;}
   .sigbar .win{font-size:12px;color:var(--ink2);font-variant-numeric:tabular-nums;}
   .sigbar button{font-size:12px;font-weight:700;padding:4px 12px;border-radius:6px;
@@ -620,9 +621,10 @@ function signalCard(){
     <div class="chrow" id="chrow"><span class="loading">loading channel list…</span></div>
     <div class="sigbar" id="sigbar" style="display:none">
       <span class="win" id="sigwin"></span>
+      <button id="zinBtn" title="Zoom in 2× (centered)">+ Zoom in</button>
       <button id="zoutBtn" title="Zoom out 2×">– Zoom out</button>
       <button id="zresetBtn" title="Show the whole night">Reset</button>
-      <span class="zhint">drag left-right on any plot to zoom · double-click to reset</span>
+      <span class="zhint">scroll to zoom at the cursor · drag left-right to select a window · double-click to reset</span>
     </div>
     <div id="sigplots"></div>`;
   return c;
@@ -643,19 +645,27 @@ async function fetchChannels(labels){
   const d = await jget(api("/api/signals", qs));
   SIGCACHE[key] = d; return d;
 }
+const MIN_WIN_S = 0.1;   // finest zoom: 0.1 s window -> individual sample detail
 // apply a new zoom window (clamped) and redraw
 function setSigWindow(t0, t1){
   if(SIG_DUR==null) return;
   let a = Math.max(0, Math.min(t0, t1)), b = Math.min(SIG_DUR, Math.max(t0, t1));
-  if(b - a < 0.5) return;                         // ignore trivial drags
-  SIG_WIN = (a<=0 && b>=SIG_DUR) ? null : [Math.round(a*100)/100, Math.round(b*100)/100];
+  if(b - a < MIN_WIN_S){                            // enforce a floor, keep centre
+    const c = (a+b)/2; a = c - MIN_WIN_S/2; b = c + MIN_WIN_S/2;
+    a = Math.max(0, a); b = Math.min(SIG_DUR, Math.max(a+MIN_WIN_S, b));
+  }
+  SIG_WIN = (a<=0 && b>=SIG_DUR) ? null : [Math.round(a*1000)/1000, Math.round(b*1000)/1000];
   drawSelected();
 }
-function zoomOut(){
-  if(!SIG_WIN){ return; }
-  const [a,b] = SIG_WIN, span = b-a, c = (a+b)/2;
-  setSigWindow(c - span, c + span);               // 2× wider
+// zoom by `factor` (<1 = in, >1 = out) around a time `centre` (default: window mid)
+function zoomAround(factor, centre){
+  const [a,b] = SIG_WIN || [0, SIG_DUR||0];
+  const c = (centre==null) ? (a+b)/2 : Math.max(a, Math.min(b, centre));
+  const half = (b-a)*factor/2;
+  setSigWindow(c - half, c + half);
 }
+function zoomIn(centre){ zoomAround(0.5, centre); }
+function zoomOut(centre){ if(SIG_WIN) zoomAround(2, centre); }
 function resetZoom(){ SIG_WIN = null; drawSelected(); }
 function fmtDur(s){ if(s>=3600) return (s/3600).toFixed(2)+" h"; if(s>=60) return (s/60).toFixed(1)+" min"; return s.toFixed(1)+" s"; }
 function updateSigBar(){
@@ -667,6 +677,7 @@ function updateSigBar(){
     : `Whole night (${fmtDur(SIG_DUR||0)})`;
   $("#zoutBtn").disabled = !SIG_WIN;
   $("#zresetBtn").disabled = !SIG_WIN;
+  const zi = $("#zinBtn"); if(zi) zi.disabled = (SIG_WIN && (SIG_WIN[1]-SIG_WIN[0]) <= MIN_WIN_S);
 }
 function renderSignalCard(d){
   const row = $("#chrow"); if(!row) return;
@@ -688,8 +699,9 @@ function renderSignalCard(d){
     chip.onclick = () => { chip.classList.toggle("on"); drawSelected(); };
     row.appendChild(chip);
   }
-  const zo = $("#zoutBtn"), zr = $("#zresetBtn");
-  if(zo) zo.onclick = zoomOut;
+  const zi = $("#zinBtn"), zo = $("#zoutBtn"), zr = $("#zresetBtn");
+  if(zi) zi.onclick = () => zoomIn();
+  if(zo) zo.onclick = () => zoomOut();
   if(zr) zr.onclick = resetZoom;
   drawSelected();
 }
@@ -740,8 +752,21 @@ function signalSVG(s, w0, w1){
   const xt = niceTicks(t0, t1, 5);
   for(const tv of xt){ svg.appendChild(txt(X(tv), H-6, fmtClock(tv), {"text-anchor":"middle", class:"axis-label"})); }
 
-  attachZoom(svg, {padL, padT, plotW, plotH, t0, t1, X});
+  attachZoom(svg, {padL, padT, plotW, plotH, t0, t1, X, Y, s});
   wrap.appendChild(svg); return wrap;
+}
+// nearest in-window sample to time `tv`; returns {t, v} or null (skips gaps)
+function _nearestSample(s, tv){
+  const T=s.t; if(!T || !T.length) return null;
+  let lo=0, hi=T.length-1;
+  while(lo<hi){ const m=(lo+hi)>>1; if(T[m]<tv) lo=m+1; else hi=m; }
+  let best=null, bd=Infinity;
+  for(const i of [lo-1, lo, lo+1]){
+    if(i<0 || i>=T.length) continue;
+    const v=s.y[i]; if(v==null || !isFinite(v)) continue;
+    const d=Math.abs(T[i]-tv); if(d<bd){ bd=d; best={t:T[i], v}; }
+  }
+  return best;
 }
 function fmtClock(s){ const m=Math.floor(s/60), sec=Math.round(s%60);
   return (s>=60) ? `${m}:${String(sec).padStart(2,'0')}` : `${s.toFixed(s<10?1:0)}s`; }
@@ -775,19 +800,33 @@ if(!window.__sigZoomInit){
 function attachZoom(svg, g){
   const cross = svgEl("line",{class:"sig-cross",y1:g.padT,y2:g.padT+g.plotH,x1:g.padL,x2:g.padL});
   cross.style.display="none";
+  const dot = svgEl("circle",{class:"sig-dot",r:2.6,cx:g.padL,cy:g.padT}); dot.style.display="none";
   const readout = txt(g.padL+2, g.padT+10, "", {class:"sig-readout"}); readout.style.display="none";
-  svg.appendChild(cross); svg.appendChild(readout);
+  svg.appendChild(cross); svg.appendChild(dot); svg.appendChild(readout);
+  const unit = (g.s.unit || "").trim();
   svg.addEventListener("mousemove", e=>{
     const vx = _sigClampX(svg,g,e.clientX);
+    const tv = _sigToT(svg,g,e.clientX);
     cross.style.display=""; readout.style.display="";
     cross.setAttribute("x1",vx); cross.setAttribute("x2",vx);
-    const tv = _sigToT(svg,g,e.clientX); readout.setAttribute("x", vx+4>860? vx-4:vx+4);
-    readout.setAttribute("text-anchor", vx+4>860?"end":"start");
-    readout.textContent = fmtClock(tv);
+    // snap to the nearest real sample so we can report its amplitude value
+    const near = _nearestSample(g.s, tv);
+    let label = fmtClock(tv);
+    if(near){
+      const cy = g.Y(near.v);
+      dot.style.display=""; dot.setAttribute("cx", g.X(near.t)); dot.setAttribute("cy", cy);
+      label = `${fmtClock(near.t)}  ·  ${near.v.toFixed(2)}${unit?(" "+unit):""}`;
+      readout.setAttribute("y", Math.max(g.padT+10, Math.min(g.padT+g.plotH-2, cy-6)));
+    } else {
+      dot.style.display="none"; readout.setAttribute("y", g.padT+10);
+    }
+    readout.setAttribute("x", vx+4 > (g.padL+g.plotW-4) ? vx-4 : vx+4);
+    readout.setAttribute("text-anchor", vx+4 > (g.padL+g.plotW-4) ? "end" : "start");
+    readout.textContent = label;
     if(SIG_DRAG && SIG_DRAG.svg===svg){ const x0=Math.min(SIG_DRAG.startX,vx), w=Math.abs(vx-SIG_DRAG.startX);
       SIG_DRAG.brush.setAttribute("x",x0); SIG_DRAG.brush.setAttribute("width",w); }
   });
-  svg.addEventListener("mouseleave", ()=>{ cross.style.display="none"; readout.style.display="none"; });
+  svg.addEventListener("mouseleave", ()=>{ cross.style.display="none"; dot.style.display="none"; readout.style.display="none"; });
   svg.addEventListener("mousedown", e=>{
     const startX=_sigClampX(svg,g,e.clientX);
     const brush=svgEl("rect",{class:"sig-brush",x:startX,y:g.padT,width:0,height:g.plotH});
@@ -796,6 +835,12 @@ function attachZoom(svg, g){
     e.preventDefault();
   });
   svg.addEventListener("dblclick", ()=> resetZoom());
+  // scroll to zoom, centered on the cursor's time (the natural zoom gesture)
+  svg.addEventListener("wheel", e=>{
+    e.preventDefault();
+    const tv = _sigToT(svg,g,e.clientX);
+    zoomAround(e.deltaY < 0 ? 0.8 : 1.25, tv);      // up = in, down = out
+  }, {passive:false});
 }
 
 // ---- svg helpers ----

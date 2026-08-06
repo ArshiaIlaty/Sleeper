@@ -27,7 +27,7 @@ An interactive, single-page web app to browse the dataset one patient at a time:
   number is shown against the cohort mean and flagged **red** when the patient is
   worse than average. Computed on demand in `dynamics.py` (same algorithm as the
   cohort EDA `stats_transitions.py`).
-- **PSG signals** — pick any channels; the server downsamples each to ~2500 points before sending, so the 170 MB EDFs never hit the browser. **Drag left-right on any plot to zoom into a time window** — the server re-samples just that window (at full/near-raw resolution when short enough), so spikes and beat-to-beat morphology become visible; double-click or **Reset** returns to the whole night, **Zoom out** widens 2×. A hover crosshair shows the time at the cursor. Each plot is fully framed with min/mid/max y-ticks.
+- **PSG signals** — pick any channels; the server downsamples each to ~2500 points before sending, so the 170 MB EDFs never hit the browser. **Scroll to zoom in/out at the cursor**, or **drag left-right to select a window** — the server re-samples just that window, so a short enough window returns *every raw sample* (e.g. a 0.1 s window on a 200 Hz EKG = 20 individual samples), making spikes and beat-to-beat morphology fully visible. **+ Zoom in** / **– Zoom out** step 2×, double-click or **Reset** returns to the whole night (down to a 0.1 s floor). The hover crosshair snaps to the nearest sample and shows its **time and amplitude value** (with units). Each plot is fully framed with min/mid/max y-ticks.
 - **Hover explanations** — every event index, sleep stage, channel, and
   demographic field shows a plain-language tooltip on hover (or keyboard focus).
   Definitions live in `glossary.py` (one source of truth), served at
