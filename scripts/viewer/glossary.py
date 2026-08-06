@@ -136,6 +136,15 @@ DYNAMICS_GLOSSARY = {
     "REM→Wake": "Rate of waking directly out of REM sleep. Frequent REM→Wake fragments dreaming sleep.",
     "N1→Wake": "Rate of waking out of the lightest sleep stage — easy, frequent arousals.",
     "N2→Wake": "Rate of waking directly out of N2, the most common sleep stage.",
+    "bandpower": (
+        "Fraction of the EEG's 0.5–30 Hz power that falls in each frequency band, "
+        "averaged over that stage's 30 s epochs: delta (0.5–4 Hz, slow waves), "
+        "theta (4–8), alpha (8–12), sigma (12–16, sleep spindles), beta (16–30). "
+        "Delta dominates deep N3, sigma rises in N2, and faster rhythms grow in "
+        "Wake/REM. This is the meaningful per-stage EEG 'average' — averaging the "
+        "raw waveform in time would cancel to near zero, since the oscillations "
+        "aren't phase-aligned across epochs."
+    ),
 }
 
 

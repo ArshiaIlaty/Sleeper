@@ -115,6 +115,23 @@
   .chip{padding:4px 10px;border:1px solid var(--axis);border-radius:16px;cursor:pointer;
         font-size:12px;background:var(--panel);user-select:none;}
   .chip.on{background:var(--blue);color:#fff;border-color:var(--blue);}
+  /* per-stage signal chunking */
+  .ststat-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-bottom:14px;}
+  .ststat{border:1px solid var(--grid);border-radius:8px;padding:8px 10px;border-left-width:4px;}
+  .ststat .s{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;}
+  .ststat .n{font-size:16px;font-weight:700;font-variant-numeric:tabular-nums;margin-top:2px;}
+  .ststat .sub{font-size:10.5px;color:var(--muted);margin-top:2px;font-variant-numeric:tabular-nums;}
+  .stepoch-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;}
+  .stepoch{border:1px solid var(--grid);border-radius:8px;padding:6px 8px 2px;border-top-width:3px;}
+  .stepoch .h{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;
+              display:flex;justify-content:space-between;align-items:baseline;}
+  .stepoch .h .sub{font-size:10px;color:var(--muted);font-weight:400;}
+  .bandbars{display:flex;flex-direction:column;gap:5px;margin:4px 0 8px;}
+  .bandrow{display:flex;align-items:center;gap:8px;font-size:11px;}
+  .bandrow .bl{width:44px;color:var(--ink2);text-transform:capitalize;}
+  .bandrow .bt{flex:1;height:12px;background:var(--surface);border-radius:3px;overflow:hidden;}
+  .bandrow .bt i{display:block;height:100%;background:var(--blue);border-radius:3px;}
+  .bandrow .bv{width:44px;text-align:right;color:var(--muted);font-variant-numeric:tabular-nums;}
   svg{display:block;width:100%;}
   .axis-label{font-size:10px;fill:var(--muted);}
   .sig-label{font-size:11px;font-weight:700;fill:var(--ink);}
@@ -328,7 +345,9 @@ async function selectPatient(bids, li){
   m.appendChild(caisrCard(caisr));
   m.appendChild(dynamicsCard(dyn));
   m.appendChild(signalCard());
-  loadSignals();  // fetch default channels
+  m.appendChild(stageSignalCard());
+  loadSignals();       // fetch default channels
+  loadStageSignals();  // fetch channel list for the per-stage panel
 }
 
 function demoCard(d){
@@ -493,17 +512,50 @@ function dynamicsCard(d){
   const c = div("card");
   if(d && d.error){ c.innerHTML = `<h2>Sleep dynamics</h2><div class="err">${d.error}</div>`; return c; }
   if(!d || !d.ok){ c.innerHTML = `<h2>Sleep dynamics</h2><div class="hint">No stage-transition data for this recording.</div>`; return c; }
-  const matTip = tipFor('dynamics','transition matrix');
   c.innerHTML = `<h2>Sleep dynamics — stage transitions &amp; fragmentation</h2>`;
 
+  // raw is always present (top-level == raw for back-compat); clean is present
+  // when preprocessing ran. Default to the preprocessed view.
+  const raw = d.raw || d;
+  const clean = (d.clean && d.clean.ok) ? d.clean : null;
+  const body = div(""); body.style.marginTop = "4px";
+  if(clean){
+    const tabs = div("tabs");
+    const note = div("mcap");
+    for(const [v,label] of [["clean","Preprocessed"],["raw","Raw"]]){
+      const btn = document.createElement("button"); btn.textContent = label; btn.dataset.v = v;
+      btn.onclick = () => renderDyn(v);
+      tabs.appendChild(btn);
+    }
+    c.appendChild(tabs);
+    c.appendChild(note);
+    c.appendChild(body);
+    function renderDyn(view){
+      [...tabs.children].forEach(b=>b.classList.toggle("on", b.dataset.v===view));
+      note.innerHTML = view==="clean"
+        ? `Computed on the <b>preprocessed</b> hypnogram (single-epoch spikes shorter than ${d.min_bout_min} min merged away). Fragmentation and transition counts drop versus raw — the counts below reflect biologically plausible stage changes.`
+        : `Computed on the <b>raw</b> CAISR staging (as scored, no smoothing).`;
+      dynamicsBody(body, view==="clean" ? clean : raw);
+    }
+    renderDyn("clean");
+  } else {
+    c.appendChild(body);
+    dynamicsBody(body, raw);
+  }
+  return c;
+}
+// Render the matrices + tiles for one dynamics view (raw or clean) into `box`.
+function dynamicsBody(box, d){
+  box.innerHTML = "";
+  const matTip = tipFor('dynamics','transition matrix');
   const order = d.stage_order;              // [Wake,N1,N2,N3,REM]
 
   // --- (1) transition probability heatmap (rows sum to 100%) ---
   const h3 = document.createElement("h3");
   h3.textContent = "Stage-to-stage transition probability";
   if(matTip){ h3.className="info"; h3.setAttribute("data-tip", matTip); }
-  c.appendChild(h3);
-  c.appendChild(matrixHeatmap(order, (i,j)=>{
+  box.appendChild(h3);
+  box.appendChild(matrixHeatmap(order, (i,j)=>{
     const p = d.transition_pct[i][j], coh = d.cohort_pct[i][j];
     const delta = (p-coh>=0?"+":"") + Math.round((p-coh)*10)/10;
     return { norm: p/100, text: p>=0.5? p+"%" : (p>0? "<1%":"0"),
@@ -511,7 +563,7 @@ function dynamicsCard(d){
   }));
   const cap = div("mcap");
   cap.textContent = `Each row sums to 100%. Darker = more likely. Hover a cell to compare with the cohort mean. Sleep time ≈ ${d.tst_hours} h.`;
-  c.appendChild(cap);
+  box.appendChild(cap);
 
   // --- (2) transition COUNT heatmap, diagonal zeroed (self-transitions removed
   // so the actual stage changes carry the colour scale) ---
@@ -522,8 +574,8 @@ function dynamicsCard(d){
       if(i!==j) cmax = Math.max(cmax, counts[i][j]);
     const h3b = document.createElement("h3");
     h3b.textContent = "Number of transitions (self-transitions zeroed)";
-    c.appendChild(h3b);
-    c.appendChild(matrixHeatmap(order, (i,j)=>{
+    box.appendChild(h3b);
+    box.appendChild(matrixHeatmap(order, (i,j)=>{
       if(i===j) return { norm: 0, text: "—", muted: true,
         tip: `<b>${order[i]} → ${order[i]}</b><br>Self-transition (stage stays) — zeroed here to highlight actual stage changes.` };
       const n = counts[i][j];
@@ -532,15 +584,14 @@ function dynamicsCard(d){
     }));
     const cap2 = div("mcap");
     cap2.textContent = "Raw count of each stage change over the whole recording. The diagonal (stage → itself) is set to zero so the off-diagonal moves dominate the colour scale.";
-    c.appendChild(cap2);
+    box.appendChild(cap2);
   }
 
   // --- fragmentation tiles ---
-  c.appendChild(dynSection("Fragmentation & spikes (vs cohort mean)", d.fragmentation));
+  box.appendChild(dynSection("Fragmentation & spikes (vs cohort mean)", d.fragmentation));
   // --- named transition rates ---
   const named = d.named_transitions.map(n=>({...n, higher_is_worse:null}));
-  c.appendChild(dynSection("Key transition rates (per hour of sleep)", named));
-  return c;
+  box.appendChild(dynSection("Key transition rates (per hour of sleep)", named));
 }
 function dynSection(title, items){
   const wrap = div("");
@@ -841,6 +892,130 @@ function attachZoom(svg, g){
     const tv = _sigToT(svg,g,e.clientX);
     zoomAround(e.deltaY < 0 ? 0.8 : 1.25, tv);      // up = in, down = out
   }, {passive:false});
+}
+
+// ---- signal chunked by sleep stage ----
+// Every 30-s epoch of one channel is grouped by its preprocessed stage; per
+// stage we show amplitude stats, a representative example epoch, and (EEG only)
+// mean relative band power.
+let STSIG_CH = null;                        // channel currently profiled
+const STAGE_ORDER_SS = ["Wake","N1","N2","N3","REM"];
+function stageSignalCard(){
+  const c = div("card"); c.id = "stsigcard";
+  c.innerHTML = `<h2>Signal by sleep stage <span class="hint">(each channel split into its Wake / N1 / N2 / N3 / REM epochs, using the preprocessed staging)</span></h2>
+    <div class="chrow" id="stchrow"><span class="loading">loading channel list…</span></div>
+    <div id="stsigbody"><div class="hint">Pick a channel above to see it split by sleep stage.</div></div>`;
+  return c;
+}
+async function loadStageSignals(){
+  STSIG_CH = null;
+  const d = await jget(api("/api/stage_signals", "bids="+encodeURIComponent(CURRENT))); // labels only
+  const row = $("#stchrow"); if(!row) return;
+  if(d.error){ row.innerHTML = `<div class="err">${d.error}</div>`; return; }
+  const labels = d.all_labels || [];
+  // default to a good EEG channel if present, else the first channel
+  const roles = d.roles || {};
+  let def = labels.find(l=>roles[l]==="eeg") || labels[0];
+  row.innerHTML = "";
+  for(const l of labels){
+    const chip = document.createElement("span");
+    chip.className = "chip" + (l===def?" on":"");
+    chip.textContent = l; chip.dataset.ch = l;
+    const rtip = tipFor('role', roles[l]); if(rtip) chip.setAttribute("data-tip", `${l} · ${rtip}`);
+    chip.onclick = () => { row.querySelectorAll(".chip").forEach(x=>x.classList.remove("on"));
+      chip.classList.add("on"); drawStageSignal(l); };
+    row.appendChild(chip);
+  }
+  if(def) drawStageSignal(def);
+}
+async function drawStageSignal(ch){
+  STSIG_CH = ch;
+  const box = $("#stsigbody"); if(!box) return;
+  box.innerHTML = `<div class="loading">splitting ${ch} by stage…</div>`;
+  const d = await jget(api("/api/stage_signals",
+    "bids="+encodeURIComponent(CURRENT)+"&ch="+encodeURIComponent(ch)));
+  if(STSIG_CH !== ch) return;               // a newer selection won the race
+  if(d.error){ box.innerHTML = `<div class="err">${d.error}</div>`; return; }
+  if(!d.ok || !d.stages || !d.stages.length){
+    box.innerHTML = `<div class="hint">No staged signal to summarise for ${ch}.</div>`; return; }
+  box.innerHTML = "";
+  const unit = d.unit ? (" "+d.unit) : "";
+
+  // (1) per-stage amplitude stat tiles
+  const stat = div("ststat-grid");
+  for(const s of d.stages){
+    const t = div("ststat"); t.style.borderLeftColor = `var(--${s.color_key})`;
+    t.innerHTML = `<div class="s" style="color:var(--${s.color_key})">${s.stage}</div>`+
+      `<div class="n">${fmtNum(s.mean)}<span style="font-size:11px;color:var(--muted)"> ± ${fmtNum(s.std)}${unit}</span></div>`+
+      `<div class="sub">${s.minutes} min · ${s.pct_epochs}% · ${s.n_epochs} epochs</div>`+
+      `<div class="sub">range ${fmtNum(s.p5)} … ${fmtNum(s.p95)}${unit} (5–95%)</div>`;
+    stat.appendChild(t);
+  }
+  box.appendChild(stat);
+
+  // (2) EEG relative band power per stage (if present)
+  if(d.is_eeg && d.stages.some(s=>s.bandpower)){
+    const h = document.createElement("h3");
+    h.textContent = "EEG relative band power per stage";
+    const htip = tipFor('dynamics','bandpower'); if(htip){ h.className="info"; h.setAttribute("data-tip", htip); }
+    box.appendChild(h);
+    const grid = div("stepoch-grid");
+    for(const s of d.stages){
+      if(!s.bandpower) continue;
+      const card = div("stepoch"); card.style.borderTopColor = `var(--${s.color_key})`;
+      let rows = "";
+      for(const b of d.bands){
+        const v = s.bandpower[b]; const pct = v==null?0:Math.round(v*100);
+        rows += `<div class="bandrow"><span class="bl">${b}</span>`+
+          `<span class="bt"><i style="width:${pct}%;background:var(--${s.color_key})"></i></span>`+
+          `<span class="bv">${v==null?"—":pct+"%"}</span></div>`;
+      }
+      card.innerHTML = `<div class="h">${s.stage}<span class="sub">${s.minutes} min</span></div><div class="bandbars">${rows}</div>`;
+      grid.appendChild(card);
+    }
+    box.appendChild(grid);
+    const cap = div("mcap");
+    cap.textContent = "Mean fraction of 0.5–30 Hz EEG power in each band, averaged over that stage's epochs. Delta dominates N3; sigma (spindles) rises in N2. This is the meaningful per-stage EEG average — a time-domain average of unlocked oscillations would cancel to zero.";
+    box.appendChild(cap);
+  }
+
+  // (3) representative example epoch waveform per stage
+  const h2 = document.createElement("h3");
+  h2.textContent = "Representative 30 s epoch per stage";
+  box.appendChild(h2);
+  const eg = div("stepoch-grid");
+  for(const s of d.stages){
+    if(!s.example) continue;
+    const card = div("stepoch"); card.style.borderTopColor = `var(--${s.color_key})`;
+    card.innerHTML = `<div class="h">${s.stage}<span class="sub">@ ${fmtClock(s.example.start_min*60)} · epoch ${s.example.epoch_index}</span></div>`;
+    card.appendChild(epochSVG(s.example, `var(--${s.color_key})`, unit));
+    eg.appendChild(card);
+  }
+  box.appendChild(eg);
+  const cap2 = div("mcap");
+  cap2.textContent = "The 30-second epoch from the middle of each stage's longest continuous bout — the 'purest' stretch of that stage — so you can compare morphology across stages side by side.";
+  box.appendChild(cap2);
+}
+// small framed 30-s epoch waveform
+function epochSVG(ex, color, unit){
+  const W=280, H=90, padL=8, padR=8, padT=8, padB=14;
+  const svg = svgEl("svg",{viewBox:`0 0 ${W} ${H}`});
+  const plotW=W-padL-padR, plotH=H-padT-padB;
+  const ys = ex.y.filter(v=>v!=null && isFinite(v));
+  if(!ys.length){ svg.appendChild(txt(padL,H/2,"(no data)",{class:"axis-label"})); return svg; }
+  let mn=Math.min(...ys), mx=Math.max(...ys); if(mn===mx) mx=mn+1;
+  const pad=(mx-mn)*0.08; mn-=pad; mx+=pad;
+  const tmax = ex.t.length? ex.t[ex.t.length-1] : 30;
+  const X = t => padL + (t/(tmax||30))*plotW;
+  const Y = v => padT + (1-(v-mn)/(mx-mn))*plotH;
+  svg.appendChild(svgEl("rect",{x:padL,y:padT,width:plotW,height:plotH,class:"sig-frame"}));
+  let d="",started=false;
+  for(let i=0;i<ex.t.length;i++){ const v=ex.y[i]; if(v==null||!isFinite(v)){started=false;continue;}
+    const px=X(ex.t[i]), py=Y(v); d += (started?` L${px},${py}`:`M${px},${py}`); started=true; }
+  svg.appendChild(svgEl("path",{d, fill:"none", stroke:color, "stroke-width":1.1}));
+  svg.appendChild(txt(W-padR, padT+8, `${mn.toFixed(1)}–${mx.toFixed(1)}${unit||''}`, {"text-anchor":"end", class:"axis-label"}));
+  for(const sec of [0,10,20,30]) svg.appendChild(txt(X(sec), H-4, sec+"s", {"text-anchor":"middle", class:"axis-label"}));
+  return svg;
 }
 
 // ---- svg helpers ----

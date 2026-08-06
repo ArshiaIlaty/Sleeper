@@ -9,6 +9,40 @@ Legend: ✅ done & verified · 🔬 verified against data · 📌 needs follow-u
 
 ---
 
+## 2026-08-06 (dynamics + per-stage signals) — Preprocessed dynamics & signal-by-stage
+
+Two requests: (1) show the sleep-dynamics matrices/stats for the **preprocessed**
+staging too, not just raw; (2) chunk each patient's biosignals by sleep stage and
+show per-stage detail + averages.
+
+### Sleep dynamics on preprocessed staging
+`/api/dynamics` now returns both `raw` and `clean` dynamics (`clean` computed on
+the spike-smoothed hypnogram from `preprocess.smooth_stages`, same cohort
+baseline). The dynamics card gained **Preprocessed / Raw tabs** (defaults to
+Preprocessed) that re-render both heatmaps + all fragmentation/transition tiles
+for the chosen view; top-level fields stay == raw for back-compat.
+- 🔬 Verified on a real patient: raw single-epoch spikes 15 → 0 after smoothing;
+  stage-shift index 15.18 → 7.63 /h.
+
+### Signal by sleep stage — `scripts/viewer/stage_signals.py` (new)
+Aligns one channel to the preprocessed per-epoch staging (epoch i =
+samples[i·spe:(i+1)·spe], spe = round(fs·30); shorter of signal/staging wins) and
+per stage produces: amplitude stats (mean±SD, 5–95%, minutes/epochs/%), a
+**representative 30 s example epoch** (middle of that stage's longest bout,
+min/max-decimated), and — EEG only — **mean relative band power** (delta/theta/
+alpha/sigma/beta via per-epoch rFFT, gated to fs ≥ 60 Hz). New endpoint
+`/api/stage_signals?ch=…` (header-only channel list when `ch` omitted; reads the
+big physio EDF lazily, one channel). New card `stageSignalCard` with per-stage
+stat tiles, band-power bars, and framed example-epoch plots.
+- Suggested + added the EEG band-power panel as the meaningful per-stage EEG
+  "average" (a time-domain average of unlocked oscillations cancels to ~0).
+- 🔬 Verified: synthetic-signal band dominance is correct per stage; real C4-M1
+  gives 5 stages, delta-dominant deep sleep, N3 highest EEG variance, zero
+  NaN/Inf, valid JSON; non-EEG channels (EKG/SaO2) correctly omit band power.
+- Pure numpy (no SciPy), so it runs in the same minimal viewer environment.
+
+---
+
 ## 2026-08-06 (UI polish) — Signal zoom, plot framing, hypnogram-label fix
 
 Three UI fixes reported after using the app.

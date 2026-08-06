@@ -28,7 +28,8 @@ import edfio
 
 from glossary import GLOSSARY
 from dynamics import patient_dynamics
-from preprocess import staging_report
+from preprocess import staging_report, smooth_stages
+from stage_signals import stage_signal_profile
 from sources import REGISTRY, DEFAULT_DATASET, get_dataset
 
 SITE_NAMES = {"S0001": "BIDMC", "I0002": "Emory", "I0006": "Kaiser"}
@@ -199,7 +200,12 @@ def api_caisr(ds, bids):
 def api_dynamics(ds, bids):
     """Per-patient sleep-stage dynamics report: the epoch-to-epoch transition
     matrix + fragmentation/spike statistics, each paired with the cohort mean.
-    Reads only the small CAISR stage channel."""
+    Reads only the small CAISR stage channel.
+
+    Computed on BOTH the raw CAISR staging and the preprocessed (spike-smoothed)
+    staging, so the UI can toggle between them — the raw view shows the scorer's
+    fragmentation, the preprocessed view shows it after implausible single-epoch
+    spikes are merged away. The cohort baseline is the same for both."""
     r = ds.record(bids)
     if not r:
         return {"error": "unknown patient"}
@@ -212,7 +218,14 @@ def api_dynamics(ds, bids):
         if s.label.strip() == "stage_caisr":
             stage = np.asarray(s.data, float)
             break
-    out = patient_dynamics(stage)
+    raw = patient_dynamics(stage)
+    out = dict(raw)                          # backward-compatible: top level == raw
+    out["raw"] = raw
+    if stage is not None:
+        clean_codes, _ = smooth_stages(np.rint(stage).astype(int),
+                                       min_bout_epochs=MIN_BOUT_EPOCHS)
+        out["clean"] = patient_dynamics(clean_codes)
+        out["min_bout_min"] = round(MIN_BOUT_EPOCHS * 30.0 / 60.0, 2)
     out["bids"] = bids
     out["dataset"] = ds.key
     return out
@@ -285,6 +298,64 @@ def api_signals(ds, bids, want=None, t0=None, t1=None):
     return out
 
 
+def _caisr_stage_codes(ds, r, bids):
+    """Preprocessed per-epoch stage codes for a record, or (None, reason)."""
+    site, sess = r.get("SiteID", ""), r.get("SessionID", "1")
+    edf = ds.open_caisr(site, bids, sess)
+    if edf is None:
+        return None, "no CAISR annotation file for this patient"
+    stage = None
+    for s in edf.signals:
+        if s.label.strip() == "stage_caisr":
+            stage = np.asarray(s.data, float)
+            break
+    if stage is None:
+        return None, "no stage channel in the CAISR file"
+    clean, _ = smooth_stages(np.rint(stage).astype(int), min_bout_epochs=MIN_BOUT_EPOCHS)
+    return clean, None
+
+
+def api_stage_signals(ds, bids, want=None):
+    """Chunk one PSG channel by (preprocessed) sleep stage and summarise each
+    stage: amplitude stats, a representative example epoch, and — for EEG — mean
+    relative band power. `want` picks the channel; with none given, returns the
+    channel list only (header-only, no waveform decode)."""
+    r = ds.record(bids)
+    if not r:
+        return {"error": "unknown patient"}
+    site, sess = r.get("SiteID", ""), r.get("SessionID", "1")
+    try:
+        f = ds.physio_path(site, bids, sess)
+    except Exception as e:
+        return {"error": f"could not fetch signal file from source: {e}"}
+    if not f:
+        return {"error": "no physiological EDF for this patient"}
+    edf = edfio.read_edf(f, lazy_load_data=True)
+    labels = [s.label.strip() for s in edf.signals]
+    roles = {l: channel_role(l) for l in labels}
+    if want is None:
+        return {"bids": bids, "dataset": ds.key, "all_labels": labels,
+                "roles": roles, "stages": []}
+    codes, reason = _caisr_stage_codes(ds, r, bids)
+    if codes is None:
+        return {"error": reason}
+    target = want.strip().lower()
+    sig = next((s for s in edf.signals if s.label.strip().lower() == target), None)
+    if sig is None:
+        return {"error": f"channel {want} not in this recording"}
+    lab = sig.label.strip()
+    prof = stage_signal_profile(np.asarray(sig.data, float),
+                                float(sig.sampling_frequency), codes,
+                                role=channel_role(lab))
+    prof.update({
+        "bids": bids, "dataset": ds.key, "channel": lab,
+        "unit": str(getattr(sig, "physical_dimension", "") or "").strip(),
+        "all_labels": labels, "roles": roles,
+        "min_bout_min": round(MIN_BOUT_EPOCHS * 30.0 / 60.0, 2),
+    })
+    return prof
+
+
 # --------------------------------------------------------------------------- http
 class Handler(BaseHTTPRequestHandler):
     def _send(self, obj, code=200, ctype="application/json"):
@@ -343,6 +414,8 @@ class Handler(BaseHTTPRequestHandler):
                 t0 = q.get("t0", [None])[0]
                 t1 = q.get("t1", [None])[0]
                 return self._send(api_signals(ds, bids, want, t0, t1))
+            if u.path == "/api/stage_signals":
+                return self._send(api_stage_signals(ds, bids, q.get("ch", [None])[0]))
             return self._send({"error": "not found"}, code=404)
         except Exception as e:  # never 500 silently — report to the UI
             return self._send({"error": f"{type(e).__name__}: {e}"}, code=500)

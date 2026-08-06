@@ -25,8 +25,21 @@ An interactive, single-page web app to browse the dataset one patient at a time:
   statistics (awakenings, brief wake intrusions, stage-shift index, single-epoch
   spikes, bout counts/durations, REM periods) and named transition rates. Every
   number is shown against the cohort mean and flagged **red** when the patient is
-  worse than average. Computed on demand in `dynamics.py` (same algorithm as the
-  cohort EDA `stats_transitions.py`).
+  worse than average. The whole report has **Preprocessed / Raw tabs** (defaults
+  to Preprocessed): the raw view is CAISR as scored, the preprocessed view
+  recomputes every matrix and statistic on the spike-smoothed hypnogram, so you
+  can see fragmentation collapse once implausible single-epoch transitions are
+  merged away. Computed on demand in `dynamics.py` (same algorithm as the cohort
+  EDA `stats_transitions.py`).
+- **Signal by sleep stage** — pick any channel and it is split into its Wake / N1
+  / N2 / N3 / REM epochs (using the *preprocessed* staging). Per stage you get
+  amplitude statistics (mean ± SD, 5–95% range, minutes/epochs/percent), a
+  **representative 30-second example epoch** taken from the middle of that stage's
+  longest continuous bout so morphology is comparable across stages, and — for
+  EEG channels — **mean relative spectral band power** (delta / theta / alpha /
+  sigma / beta) per stage, the meaningful per-stage EEG "average" (delta dominates
+  N3, sigma/spindles rise in N2). Computed on demand in `stage_signals.py` (pure
+  numpy, no SciPy).
 - **PSG signals** — pick any channels; the server downsamples each to ~2500 points before sending, so the 170 MB EDFs never hit the browser. **Scroll to zoom in/out at the cursor**, or **drag left-right to select a window** — the server re-samples just that window, so a short enough window returns *every raw sample* (e.g. a 0.1 s window on a 200 Hz EKG = 20 individual samples), making spikes and beat-to-beat morphology fully visible. **+ Zoom in** / **– Zoom out** step 2×, double-click or **Reset** returns to the whole night (down to a 0.1 s floor). The hover crosshair snaps to the nearest sample and shows its **time and amplitude value** (with units). Each plot is fully framed with min/mid/max y-ticks.
 - **Hover explanations** — every event index, sleep stage, channel, and
   demographic field shows a plain-language tooltip on hover (or keyboard focus).
@@ -48,7 +61,8 @@ frontend is one dependency-free `index.html` (vanilla JS + inline SVG).
 
 | File | Purpose |
 |---|---|
-| `app.py` | HTTP server + JSON API (`/api/datasets`, `/api/patients`, `/api/demographics`, `/api/caisr`, `/api/dynamics`, `/api/signals`, `/api/glossary`, `/static/*`); all data endpoints take `?ds=standard|large`; `/api/signals` also takes `t0`/`t1` (seconds) to zoom a window at full resolution |
+| `app.py` | HTTP server + JSON API (`/api/datasets`, `/api/patients`, `/api/demographics`, `/api/caisr`, `/api/dynamics`, `/api/signals`, `/api/stage_signals`, `/api/glossary`, `/static/*`); all data endpoints take `?ds=standard|large`; `/api/signals` also takes `t0`/`t1` (seconds) to zoom a window at full resolution; `/api/dynamics` returns both `raw` and `clean` (preprocessed) dynamics; `/api/stage_signals` takes `ch` to profile one channel by stage |
+| `stage_signals.py` | Chunk one PSG channel into its per-stage 30 s epochs → per-stage amplitude stats, a representative example epoch, and EEG relative band power (pure numpy) |
 | `sources.py` | Dataset abstraction: `standard` (local FS) and `large` (S3 via the `aws` CLI), with the size-capped LRU cache for large physio EDFs |
 | `glossary.py` | Plain-language definitions of every metric, stage, channel role, field, and dynamics stat + clinical reference ranges (drives the hover tooltips) |
 | `dynamics.py` | Per-patient stage-transition matrix + fragmentation stats, with an embedded cohort baseline (mirrors `scripts/eda/stats_transitions.py`) |
