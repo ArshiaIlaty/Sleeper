@@ -64,6 +64,20 @@
   .matrix .corner{font-size:9.5px;color:var(--muted);display:flex;align-items:flex-end;
                   justify-content:flex-end;padding:0 4px 3px 0;line-height:1.1;text-align:right;}
   .mcap{font-size:11px;color:var(--muted);margin:4px 0 0;}
+  /* second-order (2-step) transition table — where sleep goes AFTER a pair */
+  .sot{border-collapse:collapse;font-size:11.5px;max-width:560px;margin-top:2px;
+       font-variant-numeric:tabular-nums;}
+  .sot th,.sot td{border:1px solid var(--grid);padding:5px 8px;text-align:center;white-space:nowrap;}
+  .sot thead th{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.03em;
+                font-weight:700;background:var(--surface);}
+  .sot .pair{text-align:left;font-family:ui-monospace,monospace;font-weight:700;color:var(--ink2);}
+  .sot .nc{color:var(--muted);font-size:10.5px;}
+  .sot td.nx{color:var(--muted);}
+  .sot td.nx.hit{color:var(--ink);}
+  .sot td.nx.top{background:#e3eefb;color:var(--blue);font-weight:700;}
+  .sot tr.rare td{opacity:.5;}
+  .sot tr:hover td{background:#f0f6fd;}
+  .sot tr:hover td.top{background:#d4e6fa;}
   /* tabs (raw vs preprocessed staging) */
   .tabs{display:flex;gap:2px;border-bottom:2px solid var(--grid);margin:2px 0 12px;}
   .tabs button{border:none;background:none;padding:7px 14px;font-size:12.5px;font-weight:700;
@@ -588,11 +602,60 @@ function dynamicsBody(box, d){
     box.appendChild(cap2);
   }
 
+  // --- (3) second-order (2-step) transitions: where sleep goes AFTER a pair ---
+  box.appendChild(secondOrderSection(d.second_order, order));
+
   // --- fragmentation tiles ---
   box.appendChild(dynSection("Fragmentation & spikes (vs cohort mean)", d.fragmentation));
   // --- named transition rates ---
   const named = d.named_transitions.map(n=>({...n, higher_is_worse:null}));
   box.appendChild(dynSection("Key transition rates (per hour of sleep)", named));
+}
+// Second-order transition table: each row is an observed stage pair (From→Via)
+// and the columns show where sleep went NEXT — i.e. P(next | previous two stages)
+// on the bout-collapsed hypnogram. Answers "after N1→N2, then where?" — which the
+// first-order matrix above, being memoryless, cannot. Patient-only (no cohort
+// baseline exists at second order yet); rare pairs (n=1) are dimmed.
+function secondOrderSection(rows, order){
+  const wrap = div("");
+  const h = document.createElement("h3");
+  h.textContent = "Where sleep goes next (2-step transitions)";
+  wrap.appendChild(h);
+  if(!rows || !rows.length){
+    const p = div("mcap");
+    p.textContent = "Not enough distinct stage changes in this recording to form 2-step sequences.";
+    wrap.appendChild(p);
+    return wrap;
+  }
+  const tbl = document.createElement("table"); tbl.className = "sot";
+  const thead = document.createElement("thead");
+  let hr = "<tr><th>From → Via</th><th>n</th>";
+  for(const s of order) hr += `<th>→ ${s}</th>`;
+  hr += "</tr>";
+  thead.innerHTML = hr;
+  tbl.appendChild(thead);
+  const tb = document.createElement("tbody");
+  for(const r of rows){
+    const tr = document.createElement("tr");
+    if(r.n <= 1) tr.className = "rare";
+    let cells = `<td class="pair">${r.from} → ${r.via}</td><td class="nc">${r.n}</td>`;
+    for(const s of order){
+      const pct = r.next_pct[s], cnt = r.next_counts[s];
+      const isTop = s === r.top && cnt > 0;
+      const cls = "nx" + (cnt>0 ? " hit" : "") + (isTop ? " top" : "");
+      const txt = cnt>0 ? (pct>=0.5 ? pct+"%" : "<1%") : "·";
+      cells += `<td class="${cls}" data-tip="<b>${r.from} → ${r.via} → ${s}</b><br>${cnt} of ${r.n} times (${pct}%)">${txt}</td>`;
+    }
+    tr.innerHTML = cells;
+    tb.appendChild(tr);
+  }
+  tbl.appendChild(tb);
+  wrap.appendChild(tbl);
+  const cap = div("mcap");
+  cap.innerHTML = "Read a row as: <b>after the patient went From→Via, this is where sleep went next.</b> " +
+    "Highlighted cell = most likely next stage. Computed on the bout-collapsed hypnogram (each row is a real stage change, not an epoch stay). Rows sorted by how often the pair occurred; dimmed rows happened only once.";
+  wrap.appendChild(cap);
+  return wrap;
 }
 function dynSection(title, items){
   const wrap = div("");

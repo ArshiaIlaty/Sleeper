@@ -160,11 +160,65 @@ def _recording_metrics(stage):
     return d, counts
 
 
+def second_order_transitions(stage):
+    """Second-order (2-step) stage transitions on the BOUT-level sequence.
+
+    First collapses consecutive identical epochs to a single entry, so the
+    sequence becomes the list of stage *bouts* in the order they occurred. Then,
+    over every consecutive triple of bouts (A, B, C), it counts where sleep goes
+    NEXT given the previous two stages — i.e. an estimate of P(C | A, B).
+
+    This answers "the patient went N1→N2, and then where?" — a question the
+    first-order matrix in `patient_dynamics` cannot, because that matrix is
+    memoryless (the N2 row is the same however N2 was reached). Working on the
+    bout-collapsed sequence keeps "A→B" a genuine stage *change* rather than a
+    same-stage epoch stay, which would otherwise dominate every row.
+
+    Returns a JSON-serialisable list of rows, sorted by frequency (n) desc:
+      [{ "from": "N1", "via": "N2", "n": 12, "top": "N3",
+         "next_pct":    {"Wake":.., "N1":.., "N2":.., "N3":.., "REM":..},
+         "next_counts": {"Wake":.., ...} }, ...]
+    or None when there is not enough staged sleep to form a triple.
+    """
+    if stage is None or len(stage) == 0:
+        return None
+    st = np.rint(np.asarray(stage, float)).astype(int)
+    seq = st[st != 9]                                  # drop Unknown
+    if seq.size < 3:
+        return None
+    # Collapse consecutive identical stages -> bout-level code sequence.
+    bouts = seq[np.insert(np.diff(seq) != 0, 0, True)]
+    if bouts.size < 3:
+        return None
+
+    triples = {}                                       # (A, B) -> {C: count}
+    for a, b, c in zip(bouts[:-2], bouts[1:-1], bouts[2:]):
+        if a in IDX and b in IDX and c in IDX:
+            nexts = triples.setdefault((int(a), int(b)), {})
+            nexts[int(c)] = nexts.get(int(c), 0) + 1
+
+    rows = []
+    for (a, b), nexts in triples.items():
+        total = sum(nexts.values())
+        pct, cnt = {}, {}
+        for code in STAGE_ORDER:
+            n = nexts.get(code, 0)
+            cnt[STAGE_LABEL[code]] = n
+            pct[STAGE_LABEL[code]] = round(100.0 * n / total, 1) if total else 0.0
+        top_code = max(nexts, key=nexts.get)
+        rows.append({
+            "from": STAGE_LABEL[a], "via": STAGE_LABEL[b], "n": total,
+            "top": STAGE_LABEL[top_code], "next_pct": pct, "next_counts": cnt,
+        })
+    rows.sort(key=lambda r: (-r["n"], r["from"], r["via"]))
+    return rows
+
+
 def patient_dynamics(stage):
     """Full per-patient dynamics payload for the viewer, JSON-serialisable.
 
     { ok, stage_order, transition_pct[5][5], transition_counts[5][5],
-      cohort_pct[5][5], fragmentation[], named_transitions[] }
+      cohort_pct[5][5], fragmentation[], named_transitions[], second_order[] }
     """
     metrics, counts = _recording_metrics(stage)
     if metrics is None:
@@ -201,4 +255,5 @@ def patient_dynamics(stage):
         "tst_hours": metrics.get("tst_hours"),
         "fragmentation": frag,
         "named_transitions": named,
+        "second_order": second_order_transitions(stage),
     }
