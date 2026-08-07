@@ -29,7 +29,8 @@ import numpy as np
 
 from sources import get_dataset, REGISTRY
 from preprocess import staging_report
-from dynamics import _recording_metrics, DYNAMIC_FIELDS_ORDER
+from dynamics import (_recording_metrics, DYNAMIC_FIELDS_ORDER,
+                      SECOND_ORDER_FIELDS_ORDER, second_order_vector)
 
 EPOCH_SEC = 30.0
 STAGE_CODES = {1: "N3", 2: "N2", 3: "N1", 4: "REM", 5: "Wake", 9: "Unknown"}
@@ -134,7 +135,10 @@ PSG_COLS = ["duration_hours", "n_epochs", "pct_unknown_epochs",
 PREP_COLS = ["prep_epochs_changed", "prep_pct_changed",
              "prep_transitions_raw", "prep_transitions_clean", "prep_transitions_removed"]
 DYN_COLS = list(DYNAMIC_FIELDS_ORDER)
-ALL_COLS = META_COLS + PSG_COLS + PREP_COLS + DYN_COLS
+# Fixed-length joint 2-step transition embedding (80 dims, same columns for every
+# recording) — concatenable per-patient features for a linear probe / MLP.
+SO2_COLS = list(SECOND_ORDER_FIELDS_ORDER)
+ALL_COLS = META_COLS + PSG_COLS + PREP_COLS + DYN_COLS + SO2_COLS
 
 
 def _demo_meta(ds, rec):
@@ -178,6 +182,10 @@ def _feature_row(ds, rec):
         if metrics:
             for k in DYN_COLS:
                 row[k] = metrics.get(k)
+        # Fixed 80-dim joint 2-step transition embedding (raw staging, to match
+        # the dynamics columns above). Always the same columns, so it is safe to
+        # concatenate across recordings for a probe/MLP.
+        row.update(second_order_vector(np.rint(stage).astype(int)))
     return row
 
 

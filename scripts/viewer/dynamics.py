@@ -214,6 +214,50 @@ def second_order_transitions(stage):
     return rows
 
 
+# Fixed, ordered list of every possible bout-level 2-step transition, so every
+# recording yields the SAME columns in the SAME order — a fixed-length,
+# concatenable per-patient embedding for a linear probe / MLP. Bout-collapsed,
+# so a bout never follows itself: A != B and C != B (C may equal A, a bounce
+# back). 5 * 4 * 4 = 80 triples.
+SECOND_ORDER_TRIPLES = [
+    (a, b, c)
+    for a in STAGE_NAMES
+    for b in STAGE_NAMES if b != a
+    for c in STAGE_NAMES if c != b
+]
+SECOND_ORDER_FIELDS_ORDER = [f"so2_{a}_{b}_{c}" for a, b, c in SECOND_ORDER_TRIPLES]
+
+
+def second_order_vector(stage):
+    """Fixed-length joint second-order transition embedding (CSV/JSON-ready).
+
+    Returns an ordered dict {column_name: joint_probability} over the fixed
+    SECOND_ORDER_FIELDS_ORDER (80 columns). Each value is the joint probability
+    count(A→B→C) / total_bout_triples on the bout-collapsed hypnogram, so the
+    vector sums to 1 (or is all-zero when there is not enough staged sleep).
+
+    Because the column set is fixed and independent of the patient, every
+    recording produces the same 80-dim vector — they concatenate across patients
+    for downstream modelling. Reuses `second_order_transitions` so the numbers
+    match the per-patient table shown in the viewer.
+    """
+    vec = {name: 0.0 for name in SECOND_ORDER_FIELDS_ORDER}
+    rows = second_order_transitions(stage)
+    if not rows:
+        return vec
+    total = float(sum(r["n"] for r in rows))
+    if total <= 0:
+        return vec
+    for r in rows:
+        a, b = r["from"], r["via"]
+        for c, cnt in r["next_counts"].items():
+            if cnt:
+                key = f"so2_{a}_{b}_{c}"
+                if key in vec:                 # guards the structural c==b cells
+                    vec[key] = round(cnt / total, 6)
+    return vec
+
+
 def patient_dynamics(stage):
     """Full per-patient dynamics payload for the viewer, JSON-serialisable.
 
