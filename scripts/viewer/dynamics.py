@@ -254,7 +254,7 @@ def second_order_vector(stage):
             if cnt:
                 key = f"so2_{a}_{b}_{c}"
                 if key in vec:                 # guards the structural c==b cells
-                    vec[key] = round(cnt / total, 6)
+                    vec[key] = cnt / total     # full precision: keeps sum == 1
     return vec
 
 
