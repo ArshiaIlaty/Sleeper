@@ -90,6 +90,7 @@ frontend is one dependency-free `index.html` (vanilla JS + inline SVG).
 | `export_features.py` | CLI: stream CAISR + demographics for a cohort → a wide per-recording feature CSV for model training (works on both datasets) |
 | `nk_features.py` | Per-sleep-stage physiological features via **NeuroKit2**: heart-rate variability (ECG), EEG complexity, and respiratory rate/variability — computed *within each stage* plus cross-stage contrasts (pure numpy + neurokit2) |
 | `export_nk_features.py` | CLI: stream the physiological EDFs → a wide per-recording **per-stage NeuroKit feature** CSV (companion to `export_features.py`; reads the big waveforms) |
+| `export_report_features.py` | CLI: stream the physiological EDFs → a wide per-recording **clinical-report feature** CSV (EEG spectral/spindles, SpO₂/hypoxic burden, respiratory events, REM density). Decodes only one EEG/SpO₂/EOG channel + `resp_caisr`; no ECG pass, so it is cheaper than the NK export. Merge with the other two CSVs on `(bids_folder, session)` |
 | `eeg_spectral.py` | Per-stage EEG spectral features (scipy): absolute + relative band power, **Theta/Alpha**, **Delta/Sigma**, **REM-slowing** `(δ+θ)/(α+σ+β)`, and **sleep-spindle** detection (11–16 Hz envelope → density/amplitude/duration in N2 & N3) |
 | `oxygenation.py` | SpO₂ features: scale-normalised (0–1 vs 0–100 auto-detect) mean/min/**T90**, **ODI**, desaturation depth stats, and **hypoxic burden** (Σ depth×duration per hour) |
 | `resp_events.py` | Respiratory-event features from `resp_caisr` (1 Hz): apnea/hypopnea/RERA **counts**, AHI/RDI, **event durations**, and SpO₂-derived **post-event overshoot** + **recovery time** |
@@ -184,6 +185,38 @@ respiratory channel are decoded per recording, never the full montage. Run under
 `(bids_folder, session)` to train on the union. `team_code.py` still computes its
 own whole-recording autonomic features from the raw waveforms; this is the
 per-stage complement.
+
+### Clinical-report signal features (`export_report_features.py`)
+
+The **third** exporter takes the signal-derived markers that previously lived only
+in the on-demand webapp report (`/api/report`) and writes them one row per
+recording, so a model can actually train on them:
+
+- **Per-stage EEG spectral** — absolute + relative band power (delta/theta/alpha/
+  sigma/beta) per stage, **Theta/Alpha**, **Delta/Sigma**, **REM-slowing**
+  `(δ+θ)/(α+σ+β)`, plus the flagship contrasts (REM slowing, N3 relative delta).
+- **Sleep spindles** — N2/N3 density, amplitude, duration + the per-recording
+  detection threshold.
+- **Oxygenation** — scale-normalised (Emory 0–1 vs 0–100 auto-detect) mean/min/
+  T90/ODI/desaturation depth and **hypoxic burden**.
+- **Respiratory events** — per-type counts, AHI/RDI, event durations, and the
+  SpO₂-derived post-event overshoot + recovery time.
+- **REM density** — the EOG rapid-eye-movement index within REM.
+
+```bash
+# on pdmle, as arshia_ilaty_physio26:
+cd /data-temp/physio-viewer
+python3 export_report_features.py --dataset standard --out exports/report_features_standard.csv
+python3 export_report_features.py --dataset large    --out exports/report_features_large.csv --resume
+```
+
+Only one central EEG, one SpO₂, and one EOG channel are decoded (plus the small
+`resp_caisr` annotation stream) — and it **deliberately does not** recompute
+ECG-HRV / EEG-complexity / respiratory rate, because those per-stage features
+already live in `nk_features_*.csv`. Skipping the whole-night R-peak detection
+makes it the cheaper waveform exporter (~2–5 s/recording). Merge all three CSVs
+(`features_*`, `nk_features_*`, `report_features_*`) on `(bids_folder, session)`
+to train on the full union.
 
 ## Notes
 
