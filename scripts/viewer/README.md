@@ -46,6 +46,21 @@ An interactive, single-page web app to browse the dataset one patient at a time:
   the real night (hover reports both the concatenated-timeline position and the true
   night time). Computed on demand in `stage_signals.py` (pure numpy, no SciPy).
 - **PSG signals** — pick any channels; the server downsamples each to ~2500 points before sending, so the 170 MB EDFs never hit the browser. **Scroll to zoom in/out at the cursor**, or **drag left-right to select a window** — the server re-samples just that window, so a short enough window returns *every raw sample* (e.g. a 0.1 s window on a 200 Hz EKG = 20 individual samples), making spikes and beat-to-beat morphology fully visible. **+ Zoom in** / **– Zoom out** step 2×, double-click or **Reset** returns to the whole night (down to a 0.1 s floor). The hover crosshair snaps to the nearest sample and shows its **time and amplitude value** (with units). Each plot is fully framed with min/mid/max y-ticks.
+- **Per-stage physiology (NeuroKit2)** — a load-on-demand card computing HRV
+  (ECG), EEG complexity, and respiratory rate *within each sleep stage* plus the
+  cross-stage contrasts that capture blunted autonomic modulation. Served by
+  `/api/nk_features` (`nk_features.py`).
+- **Clinical report** — a load-on-demand summary card (`/api/report`,
+  `clinical_report.py`) organising the team's prioritised cognitive-impairment
+  markers into **Tier 1** (REM EEG slowing, N3 slow-wave activity, N2 spindle
+  density, hypoxic burden, sleep-fragmentation index), **Tier 2** (stage-specific
+  HRV modulation, NREM parasympathetic tone, respiratory instability, REM
+  eye-movement density), a **clinical-feature table** (spindle density, SWA, REM
+  slowing, hypoxic burden, stage HRV, AHI, arousal index, PLMI), **sleep-quality
+  tiles** (efficiency, WASO, sleep/REM/N3 latency, awakenings, TST — abnormal
+  values flagged red), and a **respiratory-event panel** (counts, event
+  durations, post-event SpO₂ overshoot & recovery time). Assembled from
+  `eeg_spectral.py` / `oxygenation.py` / `resp_events.py` / `nk_features.py`.
 - **Hover explanations** — every event index, sleep stage, channel, and
   demographic field shows a plain-language tooltip on hover (or keyboard focus).
   Definitions live in `glossary.py` (one source of truth), served at
@@ -66,13 +81,19 @@ frontend is one dependency-free `index.html` (vanilla JS + inline SVG).
 
 | File | Purpose |
 |---|---|
-| `app.py` | HTTP server + JSON API (`/api/datasets`, `/api/patients`, `/api/demographics`, `/api/caisr`, `/api/dynamics`, `/api/signals`, `/api/stage_signals`, `/api/glossary`, `/static/*`); all data endpoints take `?ds=standard|large`; `/api/signals` also takes `t0`/`t1` (seconds) to zoom a window at full resolution; `/api/dynamics` returns both `raw` and `clean` (preprocessed) dynamics; `/api/stage_signals` takes `ch` to profile one channel by stage, or `ch`+`stage`(+`t0`/`t1`) to return that whole stage concatenated and zoomable |
+| `app.py` | HTTP server + JSON API (`/api/datasets`, `/api/patients`, `/api/demographics`, `/api/caisr`, `/api/dynamics`, `/api/signals`, `/api/stage_signals`, `/api/nk_features`, `/api/report`, `/api/glossary`, `/static/*`); all data endpoints take `?ds=standard|large`; `/api/signals` also takes `t0`/`t1` (seconds) to zoom a window at full resolution; `/api/dynamics` returns both `raw` and `clean` (preprocessed) dynamics; `/api/stage_signals` takes `ch` to profile one channel by stage, or `ch`+`stage`(+`t0`/`t1`) to return that whole stage concatenated and zoomable; `/api/report` assembles the full clinical report |
 | `stage_signals.py` | Chunk one PSG channel into its per-stage 30 s epochs → per-stage amplitude stats, a representative example epoch, EEG relative band power, and the whole-stage concatenated (zoomable) trace (pure numpy) |
 | `sources.py` | Dataset abstraction: `standard` (local FS) and `large` (S3 via the `aws` CLI), with the size-capped LRU cache for large physio EDFs |
 | `glossary.py` | Plain-language definitions of every metric, stage, channel role, field, and dynamics stat + clinical reference ranges (drives the hover tooltips) |
 | `dynamics.py` | Per-patient stage-transition matrix + fragmentation stats, with an embedded cohort baseline (mirrors `scripts/eda/stats_transitions.py`) |
 | `preprocess.py` | CAISR hypnogram preprocessing — minimum-bout-duration smoothing that removes implausible single-epoch stage spikes (raw + cleaned staging) |
 | `export_features.py` | CLI: stream CAISR + demographics for a cohort → a wide per-recording feature CSV for model training (works on both datasets) |
+| `nk_features.py` | Per-sleep-stage physiological features via **NeuroKit2**: heart-rate variability (ECG), EEG complexity, and respiratory rate/variability — computed *within each stage* plus cross-stage contrasts (pure numpy + neurokit2) |
+| `export_nk_features.py` | CLI: stream the physiological EDFs → a wide per-recording **per-stage NeuroKit feature** CSV (companion to `export_features.py`; reads the big waveforms) |
+| `eeg_spectral.py` | Per-stage EEG spectral features (scipy): absolute + relative band power, **Theta/Alpha**, **Delta/Sigma**, **REM-slowing** `(δ+θ)/(α+σ+β)`, and **sleep-spindle** detection (11–16 Hz envelope → density/amplitude/duration in N2 & N3) |
+| `oxygenation.py` | SpO₂ features: scale-normalised (0–1 vs 0–100 auto-detect) mean/min/**T90**, **ODI**, desaturation depth stats, and **hypoxic burden** (Σ depth×duration per hour) |
+| `resp_events.py` | Respiratory-event features from `resp_caisr` (1 Hz): apnea/hypopnea/RERA **counts**, AHI/RDI, **event durations**, and SpO₂-derived **post-event overshoot** + **recovery time** |
+| `clinical_report.py` | Assembles the per-patient **clinical report** — Tier-1 / Tier-2 markers, a clinical-feature table, and sleep-quality metrics — from every signal domain (orchestrator; reads no files itself) |
 | `HOW_TO_RUN.md` | Step-by-step run/connect guide for the whole team (host vs. viewer, tmux, troubleshooting) |
 | `index.html` | Single-page UI (vanilla JS + SVG, validated Edwards palette, tooltip engine) |
 | `edwards_logo.png` | Header logo, served from `/static/` (no CDN) |
@@ -131,9 +152,38 @@ python3 export_features.py --dataset large    --out exports/features_large.csv -
 ```
 
 `--resume` appends, skipping recordings already in the output (safe to re-run if
-interrupted). Signal-derived autonomic features (ECG-HRV, SpO₂) are intentionally
-out of scope here — the modeling code (`team_code.py`) computes those from the raw
-waveforms. Generated CSVs live in `/data-temp/physio-viewer/exports/` on pdmle.
+interrupted). This CSV covers sleep architecture only. Generated CSVs live in
+`/data-temp/physio-viewer/exports/` on pdmle.
+
+### Per-stage NeuroKit features (`export_nk_features.py`)
+
+A **separate, heavier** export reads the physiological waveforms and computes, per
+sleep stage (Wake / N1 / N2 / N3 / REM + pooled NREM + Sleep):
+
+- **ECG heart-rate variability** — HR, SDNN, RMSSD, pNN50, SDSD, CVNN, LF, HF,
+  LF/HF, and Poincaré SD1/SD2 *per stage*, plus **cross-stage contrasts** (REM/NREM
+  RMSSD & LF/HF ratios, wake–sleep HR delta, the range of HR across stages). The
+  hypothesis: cognitive impairment shows up as a *blunted autonomic swing across
+  stages* more than in any single night-average number.
+- **EEG complexity** — per-stage sample entropy + permutation entropy (reduced
+  slow-wave-sleep complexity is a decline marker).
+- **Respiratory rate & variability** per stage.
+
+```bash
+# on pdmle, as arshia_ilaty_physio26:
+cd /data-temp/physio-viewer
+python3 export_nk_features.py --dataset standard --out exports/nk_features_standard.csv
+python3 export_nk_features.py --dataset large    --out exports/nk_features_large.csv --resume
+```
+
+~7–8 s/recording (whole-night R-peak detection + **linear** HRV; the O(n²)
+`nk.hrv_nonlinear` / `fractal_higuchi` metrics are deliberately avoided — measured
+unusable without `numba` on this box). Only one ECG, one (central) EEG, and one
+respiratory channel are decoded per recording, never the full montage. Run under
+`tmux`/`nohup` for the large cohort. Merge with `features_*.csv` on
+`(bids_folder, session)` to train on the union. `team_code.py` still computes its
+own whole-recording autonomic features from the raw waveforms; this is the
+per-stage complement.
 
 ## Notes
 

@@ -9,6 +9,100 @@ Legend: ✅ done & verified · 🔬 verified against data · 📌 needs follow-u
 
 ---
 
+## 2026-08-10 (Clinical report) — EEG spectral/spindles, hypoxic burden, resp events, Tier-1/2 report
+
+Built the sleep-quality + clinical-marker feature families the team prioritised,
+on top of the per-stage physiology below. Four new pure modules in
+`scripts/viewer/` (scipy-based, degrade to None, never raise):
+
+- `eeg_spectral.py` — per-stage **absolute + relative band power** (Welch PSD),
+  **Theta/Alpha**, **Delta/Sigma**, **REM-slowing** `(δ+θ)/(α+σ+β)`, and
+  **sleep-spindle** detection (11–16 Hz Butterworth→Hilbert→smoothed envelope,
+  mean+2.5·SD threshold on pooled NREM, 0.5–3 s bursts with 0.3 s gap-merge →
+  density/amp/dur in N2 & N3). 🔬 N2 density > N3 for all 3 test sites; rel_delta
+  peaks in N3; REM slowing < N3 slowing — physiologically correct.
+- `oxygenation.py` — **hypoxic burden** (Σ desat depth×duration per hour), ODI,
+  T90, min/mean SpO₂, desat depth stats. ⚠️ **SpO₂ scale differs by site** —
+  Emory stores a 0–1 fraction, BIDMC/Kaiser 0–100; `_normalise_spo2` auto-detects
+  from the median and rescales, else a third of the cohort silently breaks. 🔬
+  Emory's 0–1 SaO₂ correctly reads mean 95%.
+- `resp_events.py` — apnea/hypopnea/RERA **counts**, AHI/RDI, **event durations**
+  (mean/median/max from contiguous `resp_caisr`@1Hz runs), **post-event SpO₂
+  overshoot** + **respiratory recovery time** (from the aligned SpO₂). 🔬 event
+  durations 12–16 s mean, recovery 4–8 s, overshoot ~1.3–1.7 %.
+- `clinical_report.py` — orchestrator (reads no files): assembles **Tier 1** (REM
+  slowing, N3 SWA, N2 spindle density, hypoxic burden, fragmentation index),
+  **Tier 2** (stage-HRV CV, NREM RMSSD, respiratory instability, REM
+  eye-movement density via a filtered-EOG proxy), a clinical-feature table, and
+  sleep-quality metrics (SE, WASO, sleep/REM/N3 latency, awakenings, TST).
+
+Wired: `app.py` `/api/report` (lazy, decodes only ECG/EEG/EOG/SpO₂/effort + the
+small resp/arousal/limb CAISR channels, ~8–14 s); a load-on-demand **Clinical
+report** card at the end of the patient view in `index.html` (Tier tiles + table +
+sleep-quality tiles with abnormal flagging + respiratory-event panel); 27 new
+`glossary.py` entries under `GLOSSARY["report"]`. ✅ Verified end-to-end through the
+live HTTP server on BIDMC/Emory/Kaiser; graceful degradation with missing channels;
+bad bids → clean error.
+
+⚠️ Known: Emory ECG peak detection sometimes yields nonsensical RMSSD (e.g. 636 ms)
+— pre-existing `nk_features` behaviour, unchanged here. Spindle detector is
+single-channel and undercounts vs expert scoring; *relative* differences are the
+usable signal. 📌 Not yet: fold these into an enriched export CSV + benchmark the
+model on them.
+
+**Standard NK export (per-stage physiology) finished** ✅ →
+`/data-temp/physio-viewer/exports/nk_features_standard.csv`, **1090 rows × 171
+cols, 0 errors** (13 records had no physio file). World-readable for teammates.
+
+---
+
+## 2026-08-10 (NeuroKit per-stage physiology) — HRV / EEG complexity / respiration
+
+New exploratory feature family: per-sleep-stage physiology from the raw waveforms
+via **NeuroKit2** (already installed on pdmle; no pip / no firewall). Rationale:
+CI is hypothesized to show as *blunted modulation across stages* more than in any
+night-average — so features are stage-resolved and the flagship ones are
+cross-stage contrasts.
+
+### Timing constraints (measured on the box, no `numba`) — drove the whole design 🔬
+- `hrv_time`/`hrv_frequency`: cheap (~0.03s/0.5s even at 8000 beats). USE.
+- `hrv_nonlinear` and umbrella `nk.hrv()`: **O(n²)** — 15s @2k beats, times out
+  past ~4k. A night's stage has 15k+ beats → NEVER call on full-night RR.
+- `fractal_higuchi`: ~268s without numba → AVOID all numba-JIT complexity metrics.
+- `entropy_sample` on the RR *interval* series is fast; on raw *signal* samples it
+  stalls → EEG epochs are decimated to ≤1024 samples, ≤25 epochs/stage.
+- ⇒ HRV uses only linear time+frequency; Poincaré SD1/SD2 added in closed form.
+
+### Code (all in `scripts/viewer/`) ✅
+- `nk_features.py` — `nk_stage_features()` → per-stage HRV (ECG), EEG sample/
+  permutation entropy, respiratory rate/variability, + cross-stage contrasts
+  (`rem_nrem_rmssd_ratio`, `wake_sleep_hr_delta`, `stage_hr_range`, …). Degrades to
+  NaN/None, never raises. `flatten_features()`/`NK_FEATURE_COLUMNS` = 160 stable cols.
+- `export_nk_features.py` — CLI mirroring `export_features.py` but reads the physio
+  EDFs (one ECG + one central EEG + one effort channel only). 171 CSV cols. ~7-8
+  s/recording. Resumable (`--resume`). Merge with `features_*.csv` on
+  `(bids_folder, session)`.
+- `app.py` — `/api/nk_features?bids=` (decodes only the 3 needed channels, ~5-10s).
+- `glossary.py` — `NK_GLOSSARY` (19 entries), served under `GLOSSARY["nk"]`.
+- `index.html` — **Per-stage physiology** card (lazy load-on-click button), per-stage
+  tables (stages=columns) + cross-stage contrast tiles; **browser-tab favicon** added
+  (`<link rel=icon>` → `/static/edwards_logo.png`).
+
+### Verified 🔬
+- End-to-end on real patients (BIDMC + Emory): HRV LF/HF rises Wake→REM, EEG SampEn
+  lowest in N3 — physiologically sensible. 6/6 export rows: 0 errors, all 171 cols
+  filled, stable schema (declared==produced), graceful degradation when ECG missing.
+- Live server on a fresh port: favicon serves 200 image/png; `/api/nk_features` OK
+  in ~5-10s; glossary serves the nk block.
+
+### Running / follow-up 📌
+- **Standard-cohort export running** (detached `setsid`) →
+  `/data-temp/physio-viewer/exports/nk_features_standard.csv`, log
+  `/tmp/nk_export_standard.log`. ~1103 recs × ~8s ≈ 2-2.5 h. `--resume` safe.
+- Not yet: large-cohort export; benchmarking the traditional model on these features.
+
+---
+
 ## 2026-08-06 (full-stage signal + AHI note) — Whole-stage zoomable trace
 
 Follow-up asks: (Q1) do event indices change under preprocessing? (Q2) show the

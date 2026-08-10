@@ -4,6 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PhysioNet 2026 — Biosignal Viewer</title>
+<link rel="icon" type="image/png" href="/static/edwards_logo.png">
+<link rel="apple-touch-icon" href="/static/edwards_logo.png">
 <style>
   /* Validated Edwards palette (dataviz color checks): red #C8102E / blue #2166a0 */
   :root{
@@ -132,6 +134,58 @@
   .bandrow .bt{flex:1;height:12px;background:var(--surface);border-radius:3px;overflow:hidden;}
   .bandrow .bt i{display:block;height:100%;background:var(--blue);border-radius:3px;}
   .bandrow .bv{width:44px;text-align:right;color:var(--muted);font-variant-numeric:tabular-nums;}
+  /* per-stage NeuroKit physiology card */
+  .nk-sub{font-size:12px;color:var(--ink2);margin:0 0 12px;line-height:1.55;max-width:760px;}
+  .nk-btn{font-size:12.5px;font-weight:700;padding:6px 16px;border-radius:6px;
+          border:1px solid var(--blue);background:var(--blue);color:#fff;cursor:pointer;font-family:inherit;}
+  .nk-btn:hover{background:#1b5687;}
+  .nk-btn:disabled{background:var(--muted);border-color:var(--muted);cursor:default;}
+  .nk-used{font-size:11px;color:var(--muted);margin:2px 0 12px;font-variant-numeric:tabular-nums;}
+  .nk-used b{color:var(--ink2);}
+  /* per-stage metric table (stages as columns, features as rows) */
+  .nktab{width:100%;border-collapse:collapse;font-size:12px;font-variant-numeric:tabular-nums;
+         margin:2px 0 6px;}
+  .nktab th,.nktab td{padding:5px 8px;text-align:right;border-bottom:1px solid var(--grid);white-space:nowrap;}
+  .nktab thead th{font-size:10.5px;text-transform:uppercase;letter-spacing:.03em;color:#fff;
+                  border-bottom:none;border-radius:5px 5px 0 0;}
+  .nktab tbody th{text-align:left;font-weight:700;color:var(--ink2);cursor:help;}
+  .nktab .rowlab .u{font-weight:400;color:var(--muted);font-size:10.5px;}
+  .nktab td.na{color:var(--muted);}
+  .nktab tbody tr:hover td,.nktab tbody tr:hover th{background:#f7fafd;}
+  /* cross-stage contrast tiles (the flagship CI signal) */
+  .nk-contrast-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(178px,1fr));gap:10px;margin:4px 0 6px;}
+  .nkc{background:var(--surface);border:1px solid var(--grid);border-radius:8px;padding:9px 11px;border-left:4px solid var(--gold);}
+  .nkc .n{font-size:18px;font-weight:700;font-variant-numeric:tabular-nums;}
+  .nkc .l{font-size:11px;color:var(--ink2);margin-top:2px;line-height:1.35;cursor:help;}
+  /* clinical report card */
+  .rep-tier{margin:6px 0 18px;}
+  .rep-tier .th{display:flex;align-items:baseline;gap:8px;margin:0 0 8px;}
+  .rep-tier .th .badge{font-size:10px;padding:2px 9px;letter-spacing:.03em;}
+  .rep-tier .th .badge.t1{background:var(--red);} .rep-tier .th .badge.t2{background:var(--blue);}
+  .rep-tier .th .cap{font-size:11px;color:var(--muted);}
+  .rep-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;}
+  .repc{background:var(--surface);border:1px solid var(--grid);border-radius:8px;padding:10px 12px;
+        border-left:4px solid var(--axis);}
+  .repc.t1{border-left-color:var(--red);} .repc.t2{border-left-color:var(--blue);}
+  .repc .n{font-size:20px;font-weight:700;font-variant-numeric:tabular-nums;}
+  .repc .n .u{font-size:11px;color:var(--muted);font-weight:400;margin-left:3px;}
+  .repc .l{font-size:11.5px;font-weight:700;color:var(--ink2);margin-top:2px;cursor:help;}
+  .repc .note{font-size:10.5px;color:var(--muted);margin-top:4px;line-height:1.35;}
+  .repc .na{color:var(--muted);}
+  /* clinical feature summary table */
+  .reptab{width:100%;border-collapse:collapse;font-size:12.5px;margin:4px 0 6px;max-width:640px;}
+  .reptab th,.reptab td{padding:7px 10px;border-bottom:1px solid var(--grid);text-align:left;}
+  .reptab td.v{text-align:right;font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap;}
+  .reptab td.u{color:var(--muted);font-size:11px;width:64px;}
+  .reptab th{font-size:10.5px;text-transform:uppercase;letter-spacing:.03em;color:var(--muted);font-weight:700;}
+  .reptab tbody tr:hover{background:#f7fafd;}
+  .reptab .feat{cursor:help;}
+  /* sleep-quality tiles */
+  .sq-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px;margin:2px 0 6px;}
+  .sq{background:var(--surface);border:1px solid var(--grid);border-radius:8px;padding:8px 10px;}
+  .sq .n{font-size:17px;font-weight:700;font-variant-numeric:tabular-nums;}
+  .sq .l{font-size:10.5px;color:var(--muted);margin-top:2px;cursor:help;}
+  .sq.abn{background:#fdeff1;border-color:var(--red);} .sq.abn .n{color:var(--red);}
   svg{display:block;width:100%;}
   .axis-label{font-size:10px;fill:var(--muted);}
   .sig-label{font-size:11px;font-weight:700;fill:var(--ink);}
@@ -347,6 +401,8 @@ async function selectPatient(bids, li){
   m.appendChild(dynamicsCard(dyn));
   m.appendChild(signalCard());
   m.appendChild(stageSignalCard());
+  m.appendChild(nkCard());
+  m.appendChild(reportCard());
   loadSignals();       // fetch default channels
   loadStageSignals();  // fetch channel list for the per-stage panel
 }
@@ -1163,6 +1219,299 @@ function epochSVG(ex, color, unit){
   svg.appendChild(txt(W-padR, padT+8, `${mn.toFixed(1)}–${mx.toFixed(1)}${unit||''}`, {"text-anchor":"end", class:"axis-label"}));
   for(const sec of [0,10,20,30]) svg.appendChild(txt(X(sec), H-4, sec+"s", {"text-anchor":"middle", class:"axis-label"}));
   return svg;
+}
+
+// ---- per-stage physiology (NeuroKit): HRV / EEG complexity / respiration ----
+// Heaviest computation in the app (~7-8 s: whole-night R-peak detection + HRV),
+// so it is loaded on demand behind a button rather than with the other cards.
+let NK_BIDS = null;                          // guards against a stale async result
+const NK_STAGE_COLS = [                      // which pools to show as table columns
+  ["wake","Wake","wake"],["n1","N1","n1"],["n2","N2","n2"],
+  ["n3","N3","n3"],["rem","REM","rem"],["nrem","NREM",null],["sleep","Sleep",null]];
+function nkCard(){
+  const c = div("card"); c.id = "nkcard";
+  c.innerHTML = `<h2>Per-stage physiology — HRV · EEG complexity · respiration</h2>
+    <p class="nk-sub info" data-tip="${(tipFor('nk','per-stage physiology')||'').replace(/"/g,'&quot;')}">
+      Heart-rate variability, EEG complexity, and breathing regularity computed
+      <b>within each sleep stage</b> from the raw waveforms (via NeuroKit2). The
+      cross-stage contrasts below capture how strongly physiology is modulated
+      across stages — a swing that flattens with autonomic dysregulation and
+      cognitive decline.</p>
+    <div id="nkbody"><button class="nk-btn" id="nkrun">Compute per-stage physiology</button>
+      <span class="hint" style="margin-left:10px">takes a few seconds — reads the ECG / EEG / effort waveforms</span></div>`;
+  // wire the button after it is in the DOM
+  setTimeout(()=>{ const b=$("#nkrun"); if(b) b.onclick = loadNkFeatures; }, 0);
+  return c;
+}
+async function loadNkFeatures(){
+  const box = $("#nkbody"); if(!box) return;
+  const bids = CURRENT; NK_BIDS = bids;
+  box.innerHTML = `<div class="loading">computing HRV, EEG complexity &amp; respiration across stages… (a few seconds)</div>`;
+  let d;
+  try { d = await jget(api("/api/nk_features", "bids="+encodeURIComponent(bids))); }
+  catch(e){ d = {error:String(e)}; }
+  if(NK_BIDS !== bids) return;                       // patient changed mid-flight
+  if(d.error){ box.innerHTML = `<div class="err">${d.error}</div>`; return; }
+  box.innerHTML = "";
+  const used = d.channels_used || {};
+  const u = div("nk-used");
+  u.innerHTML = `channels used — ECG <b>${used.ecg||'—'}</b> · EEG <b>${used.eeg||'—'}</b> · respiratory <b>${used.rsp||'—'}</b>`;
+  box.appendChild(u);
+
+  let any = false;
+  const ecg = d.ecg;
+  if(ecg && ecg.ok){ any = true; box.appendChild(nkHrvSection(ecg)); }
+  const eeg = d.eeg;
+  if(eeg && eeg.ok){ any = true; box.appendChild(nkEegSection(eeg)); }
+  const rsp = d.rsp;
+  if(rsp && rsp.ok){ any = true; box.appendChild(nkRspSection(rsp)); }
+  if(!any) box.appendChild(Object.assign(div("hint"),
+    {textContent:"No ECG / EEG / respiratory channel could be analysed for this recording."}));
+}
+// Build a per-stage table: `rows` = [[key,label,unit,decimals], …]; `getVal(stageTag,key)`.
+function nkTable(stages, rows){
+  const cols = NK_STAGE_COLS.filter(([tag])=>stages[tag]);   // only present pools
+  const tbl = document.createElement("table"); tbl.className = "nktab";
+  let head = `<thead><tr><th></th>`;
+  for(const [tag,label,ckey] of cols){
+    const bg = ckey ? `var(--${ckey})` : "var(--ink2)";
+    head += `<th style="background:${bg}">${label}</th>`;
+  }
+  head += `</tr></thead>`;
+  let body = "<tbody>";
+  for(const [key,label,unit,dec] of rows){
+    const tip = (tipFor('nk',label)||"").replace(/"/g,'&quot;');
+    body += `<tr><th class="rowlab${tip?' info':''}"${tip?` data-tip="${tip}"`:''}>${label}`+
+            (unit?` <span class="u">${unit}</span>`:"")+`</th>`;
+    for(const [tag] of cols){
+      const s = stages[tag] || {};
+      const v = s[key];
+      body += (v==null||!isFinite(v))
+        ? `<td class="na">—</td>`
+        : `<td>${(Math.round(v*Math.pow(10,dec))/Math.pow(10,dec)).toFixed(dec)}</td>`;
+    }
+    body += `</tr>`;
+  }
+  body += "</tbody>";
+  tbl.innerHTML = head + body;
+  return tbl;
+}
+function nkContrastTiles(contrasts, keys){
+  const g = div("nk-contrast-grid");
+  for(const [key,label,dec] of keys){
+    const v = contrasts ? contrasts[key] : null;
+    const tile = div("nkc");
+    const tip = (tipFor('nk',key)||"").replace(/"/g,'&quot;');
+    tile.innerHTML = `<div class="n">${(v==null||!isFinite(v))?"—":(Math.round(v*Math.pow(10,dec))/Math.pow(10,dec))}</div>`+
+      `<div class="l${tip?' info':''}"${tip?` data-tip="${tip}"`:''}>${label}</div>`;
+    g.appendChild(tile);
+  }
+  return g;
+}
+function nkHrvSection(ecg){
+  const wrap = div("");
+  const h = document.createElement("h3"); h.textContent = "Heart-rate variability by stage (ECG)";
+  wrap.appendChild(h);
+  const meta = div("nk-used");
+  meta.innerHTML = `${ecg.n_beats_clean??'—'} clean beats of ${ecg.n_beats_total??'—'} detected · RR intervals labelled by the stage of each beat`;
+  wrap.appendChild(meta);
+  wrap.appendChild(nkTable(ecg.stages||{}, [
+    ["hr_mean","HR","bpm",1],["rmssd","RMSSD","ms",1],["sdnn","SDNN","ms",1],
+    ["pnn50","pNN50","%",1],["lfhf","LF/HF","",2],["sd1sd2","SD1/SD2","",3],
+    ["n_beats","beats","",0],
+  ]));
+  const h2 = document.createElement("h3"); h2.textContent = "Cross-stage HRV contrasts (modulation across stages)";
+  wrap.appendChild(h2);
+  wrap.appendChild(nkContrastTiles(ecg.contrasts, [
+    ["rem_nrem_rmssd_ratio","REM/NREM RMSSD ratio",3],
+    ["rem_nrem_lfhf_ratio","REM/NREM LF/HF ratio",3],
+    ["rem_nrem_hr_delta","REM−NREM heart rate (bpm)",2],
+    ["wake_sleep_hr_delta","Wake−Sleep heart rate (bpm)",2],
+    ["n3_wake_rmssd_ratio","N3/Wake RMSSD ratio",3],
+    ["stage_hr_range","Stage HR range (bpm)",2],
+    ["stage_rmssd_cv","Stage RMSSD variation (CV)",3],
+  ]));
+  const cap = div("mcap");
+  cap.textContent = "A healthy autonomic system swings between high vagal variability in deep sleep and sympathetic dominance in REM/Wake. Ratios near 1 and small ranges indicate a blunted swing — the exploratory cognitive-impairment marker.";
+  wrap.appendChild(cap);
+  return wrap;
+}
+function nkEegSection(eeg){
+  const wrap = div("");
+  const h = document.createElement("h3"); h.textContent = "EEG signal complexity by stage";
+  wrap.appendChild(h);
+  wrap.appendChild(nkTable(eeg.stages||{}, [
+    ["sampen_mean","SampEn","",3],["permen_mean","PermEn","",3],["n_epochs","epochs","",0],
+  ]));
+  if(eeg.contrasts && Object.keys(eeg.contrasts).length){
+    wrap.appendChild(nkContrastTiles(eeg.contrasts, [
+      ["n3_wake_sampen_ratio","N3/Wake SampEn ratio",3],
+    ]));
+  }
+  const cap = div("mcap");
+  cap.textContent = "Sample & permutation entropy of the EEG within each stage (means over epochs, cost-capped). Complexity is normally lowest in slow-wave N3; reduced complexity is an exploratory marker of cognitive decline.";
+  wrap.appendChild(cap);
+  return wrap;
+}
+function nkRspSection(rsp){
+  const wrap = div("");
+  const h = document.createElement("h3"); h.textContent = "Respiratory rate & variability by stage";
+  wrap.appendChild(h);
+  wrap.appendChild(nkTable(rsp.stages||{}, [
+    ["rate_mean","Rate","/min",2],["rate_sd","Rate SD","/min",2],["rrv_cv","RRV CV","",3],
+  ]));
+  const cap = div("mcap");
+  cap.textContent = "Mean respiratory rate and its variability within each stage, from the effort/airflow belt. Breathing is normally most regular in stable NREM.";
+  wrap.appendChild(cap);
+  return wrap;
+}
+
+// ---- clinical report (Tier-1 / Tier-2 / clinical features + sleep quality) ----
+// The summary the team prioritised, assembled server-side from every signal
+// domain (HRV / EEG spectral & spindles / oximetry / respiratory events). Heavy
+// (~8-14 s), so it loads on demand behind a button like the physiology card.
+let REPORT_BIDS = null;
+function reportCard(){
+  const c = div("card"); c.id = "repcard";
+  c.innerHTML = `<h2>Clinical report — prioritised sleep &amp; cognition markers</h2>
+    <p class="nk-sub">A single-screen summary of the features the team flagged as
+      most relevant to cognitive impairment, computed from this recording's raw
+      waveforms and CAISR annotations. <b>Tier&nbsp;1</b> are the primary markers,
+      <b>Tier&nbsp;2</b> the supporting ones; the clinical-feature table and
+      sleep-quality tiles round it out. Exploratory — not a diagnostic report.</p>
+    <div id="repbody"><button class="nk-btn" id="reprun">Generate clinical report</button>
+      <span class="hint" style="margin-left:10px">takes ~10 s — reads ECG / EEG / EOG / SpO₂ / effort + annotations</span></div>`;
+  setTimeout(()=>{ const b=$("#reprun"); if(b) b.onclick = loadReport; }, 0);
+  return c;
+}
+async function loadReport(){
+  const box = $("#repbody"); if(!box) return;
+  const bids = CURRENT; REPORT_BIDS = bids;
+  box.innerHTML = `<div class="loading">assembling the clinical report across every signal domain… (~10 s)</div>`;
+  let d;
+  try { d = await jget(api("/api/report", "bids="+encodeURIComponent(bids))); }
+  catch(e){ d = {error:String(e)}; }
+  if(REPORT_BIDS !== bids) return;                    // patient changed mid-flight
+  if(d.error){ box.innerHTML = `<div class="err">${d.error}</div>`; return; }
+  if(!d.ok){ box.innerHTML = `<div class="hint">Could not assemble a report for this recording.</div>`; return; }
+  box.innerHTML = "";
+  const used = d.channels_used || {};
+  const u = div("nk-used");
+  u.innerHTML = `channels — ECG <b>${used.ecg||'—'}</b> · EEG <b>${used.eeg||'—'}</b> · `+
+    `EOG <b>${used.eog||'—'}</b> · SpO₂ <b>${used.spo2||'—'}</b> · effort <b>${used.rsp||'—'}</b>`;
+  box.appendChild(u);
+  box.appendChild(sleepQualitySection(d.sleep_quality));
+  box.appendChild(tierSection("Tier 1 — primary markers", "t1", d.tier1));
+  box.appendChild(tierSection("Tier 2 — supporting markers", "t2", d.tier2));
+  box.appendChild(clinicalTable(d.clinical));
+  box.appendChild(respEventSection(d.detail && d.detail.resp_events));
+}
+// format a report value at a sensible precision (ratios 2-3 dp, big numbers 0-1)
+function repFmt(v){
+  if(v==null || !isFinite(v)) return null;
+  const a = Math.abs(v);
+  if(a===0) return "0";
+  if(a < 1) return (Math.round(v*1000)/1000);
+  if(a < 10) return (Math.round(v*100)/100);
+  if(a < 100) return (Math.round(v*10)/10);
+  return Math.round(v);
+}
+function tierSection(title, cls, items){
+  const wrap = div("rep-tier");
+  const th = div("th");
+  th.innerHTML = `<span class="badge ${cls}">${cls==='t1'?'TIER 1':'TIER 2'}</span>`+
+    `<span class="cap">${title.replace(/^Tier \d+ — /,'')}</span>`;
+  wrap.appendChild(th);
+  const g = div("rep-grid");
+  for(const it of (items||[])){
+    const tile = div("repc "+cls);
+    const val = repFmt(it.value);
+    const tip = (tipFor('report', it.key)||"").replace(/"/g,'&quot;');
+    tile.innerHTML =
+      `<div class="n">${val==null?'<span class="na">—</span>':val}`+
+        `${(val!=null && it.unit)?`<span class="u">${it.unit}</span>`:''}</div>`+
+      `<div class="l${tip?' info':''}"${tip?` data-tip="${tip}"`:''}>${it.label}</div>`+
+      (it.note?`<div class="note">${it.note}</div>`:'');
+    g.appendChild(tile);
+  }
+  wrap.appendChild(g);
+  return wrap;
+}
+function clinicalTable(items){
+  const wrap = div("");
+  const h = document.createElement("h3"); h.textContent = "Clinical feature summary"; wrap.appendChild(h);
+  const tbl = document.createElement("table"); tbl.className = "reptab";
+  let body = `<thead><tr><th>Feature</th><th style="text-align:right">Value</th><th>Unit</th></tr></thead><tbody>`;
+  for(const it of (items||[])){
+    const val = repFmt(it.value);
+    const tip = (tipFor('report', it.key)||"").replace(/"/g,'&quot;');
+    body += `<tr><td class="feat${tip?' info':''}"${tip?` data-tip="${tip}"`:''}>${it.label}</td>`+
+      `<td class="v">${val==null?'—':val}</td><td class="u">${it.unit||''}</td></tr>`;
+  }
+  body += `</tbody>`;
+  tbl.innerHTML = body;
+  wrap.appendChild(tbl);
+  return wrap;
+}
+// sleep-quality tiles with abnormal flagging via the reference ranges
+const SQ_FIELDS = [
+  ["sleep_efficiency_pct","Sleep efficiency","%","sleep_efficiency"],
+  ["waso_min","WASO","min","waso"],
+  ["sleep_latency_min","Sleep latency","min","sleep_latency"],
+  ["rem_latency_min","REM latency","min","rem_latency"],
+  ["n3_latency_min","N3 latency","min",null],
+  ["n_awakenings","Awakenings","","n_awakenings"],
+  ["tst_min","TST","min","tst"],
+];
+function sleepQualitySection(sq){
+  const wrap = div("");
+  const h = document.createElement("h3"); h.textContent = "Sleep-quality metrics"; wrap.appendChild(h);
+  const g = div("sq-grid");
+  sq = sq || {};
+  for(const [key,label,unit,refKey] of SQ_FIELDS){
+    const v = sq[key];
+    const tile = div("sq");
+    const ref = refKey ? refFor(refKey) : null;
+    const a = assess(v==null?null:Number(v), ref);
+    if(a.abnormal) tile.classList.add("abn");
+    // tooltip: prefer the report glossary label text, fall back to metric ranges
+    let tip = tipFor('report', label) || (refKey ? rangeTip('metric', refKey, v==null?null:Number(v)) : "");
+    tip = (tip||"").replace(/"/g,'&quot;');
+    tile.innerHTML = `<div class="n">${v==null?'—':repFmt(Number(v))}${(v!=null&&unit)?`<span style="font-size:11px;color:var(--muted)"> ${unit}</span>`:''}</div>`+
+      `<div class="l${tip?' info':''}"${tip?` data-tip="${tip}"`:''}>${label}</div>`;
+    g.appendChild(tile);
+  }
+  wrap.appendChild(g);
+  return wrap;
+}
+// respiratory-event detail: counts, durations, recovery
+function respEventSection(re){
+  const wrap = div("");
+  if(!re || !re.ok) return wrap;
+  const h = document.createElement("h3"); h.textContent = "Respiratory events — counts, durations & recovery";
+  wrap.appendChild(h);
+  const g = div("rep-grid");
+  const tiles = [
+    ["ahi","AHI","/h","ahi"],["rdi","RDI","/h",null],
+    ["n_obstructive_apnea","Obstructive apneas","",null],
+    ["n_central_apnea","Central apneas","",null],
+    ["n_hypopnea","Hypopneas","",null],
+    ["event_dur_mean_s","Event duration (mean)","s","event_duration"],
+    ["event_dur_max_s","Event duration (max)","s","event_duration"],
+    ["post_event_overshoot","Post-event SpO₂ overshoot","%","post_event_overshoot"],
+    ["resp_recovery_time_s","Respiratory recovery time","s","resp_recovery_time_s"],
+  ];
+  for(const [key,label,unit,gk] of tiles){
+    const v = re[key];
+    const tile = div("repc");
+    const tip = (gk?tipFor('report', gk):"").replace(/"/g,'&quot;');
+    const val = repFmt(v);
+    tile.innerHTML = `<div class="n">${val==null?'<span class="na">—</span>':val}${(val!=null&&unit)?`<span class="u">${unit}</span>`:''}</div>`+
+      `<div class="l${tip?' info':''}"${tip?` data-tip="${tip}"`:''}>${label}</div>`;
+    g.appendChild(tile);
+  }
+  wrap.appendChild(g);
+  return wrap;
 }
 
 // ---- svg helpers ----

@@ -30,6 +30,8 @@ from glossary import GLOSSARY
 from dynamics import patient_dynamics
 from preprocess import staging_report, smooth_stages
 from stage_signals import stage_signal_profile, stage_concat_signal
+import nk_features
+import clinical_report
 from sources import REGISTRY, DEFAULT_DATASET, get_dataset
 
 SITE_NAMES = {"S0001": "BIDMC", "I0002": "Emory", "I0006": "Kaiser"}
@@ -368,6 +370,117 @@ def api_stage_signals(ds, bids, want=None, stage=None, t0=None, t1=None):
     return prof
 
 
+# roles used by the per-stage NeuroKit extractor, and the central-EEG preference
+_NK_EEG_PREFER = ["c3", "c4", "o1", "o2"]
+
+
+def api_nk_features(ds, bids):
+    """Per-sleep-stage physiological features (NeuroKit2): HRV from ECG, EEG
+    complexity, and respiratory rate/variability, plus cross-stage contrasts.
+
+    Decodes ONLY the channels needed (one ECG, one central EEG, one respiratory)
+    from the physio EDF — never the full montage — and aligns them to the
+    preprocessed CAISR staging. Heavy (~7-8 s/recording), so the UI loads this
+    card lazily on demand."""
+    r = ds.record(bids)
+    if not r:
+        return {"error": "unknown patient"}
+    codes, reason = _caisr_stage_codes(ds, r, bids)
+    if codes is None:
+        return {"error": reason}
+    site, sess = r.get("SiteID", ""), r.get("SessionID", "1")
+    try:
+        f = ds.physio_path(site, bids, sess)
+    except Exception as e:
+        return {"error": f"could not fetch signal file from source: {e}"}
+    if not f:
+        return {"error": "no physiological EDF for this patient"}
+    edf = edfio.read_edf(f, lazy_load_data=True)
+    labels = [s.label.strip() for s in edf.signals]
+    roles = {l: channel_role(l) for l in labels}
+    ecg_ch = nk_features._pick_channel(labels, roles, {"ecg"})
+    eeg_ch = nk_features._pick_channel(labels, roles, {"eeg"}, prefer=_NK_EEG_PREFER)
+    rsp_ch = nk_features._pick_channel(labels, roles, {"effort", "airflow"})
+    keep = {c for c in (ecg_ch, eeg_ch, rsp_ch) if c is not None}
+    if not keep:
+        return {"error": "no ECG / EEG / respiratory channel in this recording"}
+    channels, fss = {}, {}
+    for s in edf.signals:
+        lab = s.label.strip()
+        if lab in keep and lab not in channels:
+            channels[lab] = np.asarray(s.data, float)  # decodes THIS channel only
+            fss[lab] = float(s.sampling_frequency)
+    out = nk_features.nk_stage_features(channels, fss, roles, codes)
+    out["bids"] = bids
+    out["dataset"] = ds.key
+    return out
+
+
+# roles the clinical report decodes from the physio EDF (one channel each).
+_REPORT_ROLES = [
+    ({"ecg"}, None),
+    ({"eeg"}, _NK_EEG_PREFER),
+    ({"effort", "airflow"}, None),
+    ({"eog"}, None),
+    ({"spo2"}, None),
+]
+_REPORT_CAISR = ("resp_caisr", "arousal_caisr", "limb_caisr")
+
+
+def api_report(ds, bids):
+    """Full per-patient clinical report (Tier-1 / Tier-2 / clinical features +
+    sleep-quality metrics), assembled by clinical_report.build_report.
+
+    Decodes ONLY the channels the report needs from the physio EDF (one each of
+    ECG / central EEG / effort / EOG / SpO2) plus the small CAISR resp/arousal/limb
+    annotation channels. Heavy (~8-14 s/recording: whole-night R-peak detection,
+    per-stage Welch PSD, spindle filtering, oximetry), so the UI loads it lazily."""
+    r = ds.record(bids)
+    if not r:
+        return {"error": f"unknown patient {bids}"}
+    codes, reason = _caisr_stage_codes(ds, r, bids)
+    if codes is None:
+        return {"error": reason}
+    site, sess = r.get("SiteID", ""), r.get("SessionID", "1")
+
+    # CAISR annotation channels (small) for respiratory events + arousal/limb indices
+    caisr_chans, caisr_fss = {}, {}
+    cedf = ds.open_caisr(site, bids, sess)
+    if cedf is not None:
+        for s in cedf.signals:
+            lab = s.label.strip()
+            if lab in _REPORT_CAISR:
+                caisr_chans[lab] = np.asarray(s.data, float)
+                caisr_fss[lab] = float(s.sampling_frequency)
+
+    try:
+        f = ds.physio_path(site, bids, sess)
+    except Exception as e:
+        return {"error": f"could not fetch signal file from source: {e}"}
+    if not f:
+        return {"error": "no physiological EDF for this patient"}
+    edf = edfio.read_edf(f, lazy_load_data=True)
+    labels = [s.label.strip() for s in edf.signals]
+    roles = {l: channel_role(l) for l in labels}
+    keep = set()
+    for wanted, prefer in _REPORT_ROLES:
+        ch = nk_features._pick_channel(labels, roles, wanted, prefer=prefer)
+        if ch is not None:
+            keep.add(ch)
+    channels, fss = {}, {}
+    for s in edf.signals:
+        lab = s.label.strip()
+        if lab in keep and lab not in channels:
+            channels[lab] = np.asarray(s.data, float)   # decodes THIS channel only
+            fss[lab] = float(s.sampling_frequency)
+
+    out = clinical_report.build_report(channels, fss, roles, codes,
+                                       caisr_chans, caisr_fss)
+    out["bids"] = bids
+    out["dataset"] = ds.key
+    return out
+
+
 # --------------------------------------------------------------------------- http
 class Handler(BaseHTTPRequestHandler):
     def _send(self, obj, code=200, ctype="application/json"):
@@ -430,6 +543,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(api_stage_signals(
                     ds, bids, q.get("ch", [None])[0], q.get("stage", [None])[0],
                     q.get("t0", [None])[0], q.get("t1", [None])[0]))
+            if u.path == "/api/nk_features":
+                return self._send(api_nk_features(ds, bids))
+            if u.path == "/api/report":
+                return self._send(api_report(ds, bids))
             return self._send({"error": "not found"}, code=404)
         except Exception as e:  # never 500 silently — report to the UI
             return self._send({"error": f"{type(e).__name__}: {e}"}, code=500)

@@ -158,6 +158,146 @@ DYNAMICS_GLOSSARY = {
 }
 
 
+# --- per-stage NeuroKit physiology (HRV / EEG complexity / respiration) --------
+# Explanations for the "Per-stage physiology" card. Keyed both by the human
+# metric label (e.g. "RMSSD") used in the per-stage tables and by the machine
+# name of each cross-stage contrast (e.g. "rem_nrem_rmssd_ratio").
+NK_GLOSSARY = {
+    "per-stage physiology": (
+        "Heart-rate variability, EEG complexity, and respiratory regularity computed "
+        "*within each sleep stage* from the raw waveforms. The hypothesis: cognitive "
+        "impairment shows up less in a night's average physiology than in how strongly "
+        "physiology is modulated across stages — a healthy autonomic system swings "
+        "between vagal deep sleep and sympathetic REM, and that swing flattens with "
+        "autonomic dysregulation and neurodegeneration."
+    ),
+    "HR": "Mean heart rate (beats per minute) during that stage, from the ECG R-peaks.",
+    "RMSSD": (
+        "Root mean square of successive RR-interval differences (ms) — a beat-to-beat "
+        "measure dominated by parasympathetic (vagal) tone. Normally highest in deep "
+        "NREM and lower in REM/Wake; a blunted stage-to-stage change is the marker of "
+        "interest."
+    ),
+    "SDNN": "Standard deviation of RR intervals (ms) — overall heart-rate variability within the stage.",
+    "pNN50": "Percentage of successive RR intervals differing by more than 50 ms — another vagal-tone index; higher = more parasympathetic activity.",
+    "LF/HF": (
+        "Ratio of low-frequency (0.04–0.15 Hz) to high-frequency (0.15–0.4 Hz) HRV "
+        "power — a rough index of sympatho-vagal balance. Rises from deep sleep toward "
+        "REM/Wake in a healthy night."
+    ),
+    "SD1/SD2": "Ratio of the short- to long-term Poincaré-plot axes of the RR series — short-term (SD1, vagal) relative to overall (SD2) variability.",
+    "SampEn": (
+        "Sample entropy of the EEG within the stage — how unpredictable/complex the "
+        "signal is. Reduced complexity (lower entropy), especially in slow-wave sleep, "
+        "is an exploratory marker of cognitive decline."
+    ),
+    "PermEn": "Permutation entropy of the EEG — complexity based on the ordering of neighbouring samples; robust to amplitude scaling.",
+    "Rate": "Mean respiratory rate (breaths per minute) during that stage, from the effort/airflow belt.",
+    "RRV CV": "Respiratory-rate variability: coefficient of variation (SD/mean) of the breath-to-breath rate within the stage. Higher = more irregular breathing.",
+    # cross-stage contrasts (the flagship CI-relevant signal)
+    "rem_nrem_rmssd_ratio": "RMSSD in REM divided by RMSSD in NREM — how much beat-to-beat vagal variability changes between REM and non-REM sleep. A value near 1 means little modulation.",
+    "rem_nrem_lfhf_ratio": "LF/HF in REM divided by LF/HF in NREM — the shift in sympatho-vagal balance from NREM into REM.",
+    "rem_nrem_hr_delta": "Mean heart rate in REM minus mean heart rate in NREM (bpm).",
+    "wake_sleep_hr_delta": "Mean heart rate awake minus asleep (bpm) — the expected slowing of the heart during sleep; a small delta suggests blunted nocturnal autonomic regulation.",
+    "n3_wake_rmssd_ratio": "RMSSD in deep sleep (N3) divided by RMSSD in Wake — the magnitude of the vagal surge into deep sleep.",
+    "stage_hr_range": "Range of mean heart rate across the individual stages (max − min, bpm) — the overall amplitude of stage-dependent heart-rate modulation.",
+    "stage_rmssd_cv": "Coefficient of variation of RMSSD across the stages — how much beat-to-beat variability differs from stage to stage (small = flat, blunted modulation).",
+    "n3_wake_sampen_ratio": "EEG sample entropy in N3 divided by that in Wake — how much signal complexity drops in deep sleep.",
+}
+
+
+# --- clinical report (Tier-1 / Tier-2 / clinical features) --------------------
+# Explanations for the "Clinical report" card. Keyed by the machine `key` of each
+# report item and by the human labels used in the sleep-quality tiles.
+REPORT_GLOSSARY = {
+    "rem_slowing": (
+        "REM EEG slowing: the ratio of slow (delta+theta) to fast "
+        "(alpha+sigma+beta) EEG power measured during REM sleep. EEG slowing in "
+        "REM — a shift of power toward slower frequencies — is a recognised marker "
+        "of cognitive decline and neurodegeneration; higher values mean more slowing."
+    ),
+    "n3_swa": (
+        "N3 slow-wave activity: the fraction of EEG power in the delta band "
+        "(0.5–4 Hz) during deep N3 sleep. Slow-wave activity drives the "
+        "restorative, memory-consolidating function of deep sleep; reduced SWA is "
+        "seen with ageing and cognitive impairment."
+    ),
+    "spindle_density": (
+        "Sleep-spindle density: the number of 11–16 Hz sigma bursts (sleep "
+        "spindles) per minute of N2 sleep, detected from the central EEG envelope. "
+        "Spindles gate memory consolidation; reduced N2 spindle density tracks "
+        "memory deficits and cognitive impairment. (Single-channel detector — "
+        "relative differences are more reliable than the absolute count.)"
+    ),
+    "hypoxic_burden": (
+        "Hypoxic burden: the total area of oxygen desaturation below the running "
+        "baseline saturation, i.e. the sum over desaturations of depth × duration, "
+        "per hour of recording (%·min/h). It captures the *dose* of intermittent "
+        "nocturnal hypoxia — how deep and how long the dips are — a stronger "
+        "cardiovascular / cognitive risk marker than counting events alone."
+    ),
+    "frag_index": (
+        "Sleep fragmentation index: arousals per hour plus awakenings per hour of "
+        "sleep — a combined measure of how often sleep is interrupted. Higher = "
+        "more fragmented, less restorative sleep."
+    ),
+    "hrv_stage_range": (
+        "Stage-specific HRV modulation: the coefficient of variation of beat-to-beat "
+        "variability (RMSSD) across the sleep stages. A healthy autonomic system "
+        "varies its vagal tone strongly between stages; a small value means a "
+        "blunted, flattened stage-to-stage swing."
+    ),
+    "nrem_parasympathetic": (
+        "NREM parasympathetic tone: RMSSD (root-mean-square of successive RR "
+        "differences) pooled over NREM sleep — an index of vagal (parasympathetic) "
+        "activity during deep, stable sleep. Lower values indicate reduced "
+        "parasympathetic drive."
+    ),
+    "resp_instability": (
+        "Respiratory instability: the coefficient of variation of the breath-to-breath "
+        "rate during sleep. Higher values mean more irregular breathing, which can "
+        "reflect unstable ventilatory control."
+    ),
+    "rem_density": (
+        "REM density (eye-movement index): rapid eye-movement deflections per minute "
+        "of REM sleep, from the EOG. A proxy for REM intensity; altered REM density "
+        "is reported in depression and some neurodegenerative conditions."
+    ),
+    "nrem_rmssd": "RMSSD pooled over NREM sleep (ms) — vagal (parasympathetic) tone during deep sleep.",
+    "ahi": (
+        "Apnea–Hypopnea Index: apneas plus hypopneas per hour of sleep. <5 normal, "
+        "5–15 mild, 15–30 moderate, >30 severe sleep apnea."
+    ),
+    "arousal_index": "Arousals per hour of sleep — brief awakenings; >20/h indicates fragmented sleep.",
+    "plmi": "Periodic Limb Movement Index: periodic leg movements per hour of sleep; >15/h can fragment sleep.",
+    # respiratory-event detail
+    "post_event_overshoot": (
+        "Post-event SpO2 overshoot: how far oxygen saturation rebounds above the "
+        "pre-event baseline after an apnea/hypopnea ends (%). Reflects the "
+        "ventilatory/autonomic surge that terminates the event; a blunted overshoot "
+        "suggests impaired arousal response."
+    ),
+    "resp_recovery_time_s": (
+        "Respiratory recovery time: seconds from the oxygen nadir of an event back "
+        "up to within 1% of the pre-event baseline saturation. Prolonged recovery "
+        "indicates sluggish oxygen restoration."
+    ),
+    "event_duration": "Duration (seconds) of respiratory events (apneas/hypopneas) — the length of each contiguous scored event.",
+    "odi": "Oxygen Desaturation Index: distinct ≥3% desaturations per hour of recording.",
+    "t90": "T90: the percentage of the recording spent with oxygen saturation below 90%.",
+    "theta_alpha": "Theta/Alpha power ratio — an EEG-slowing index; a rise in theta relative to alpha accompanies drowsiness and cortical slowing.",
+    "delta_sigma": "Delta/Sigma power ratio — deep slow-wave power relative to the spindle band; high in N3.",
+    # sleep-quality tile labels
+    "Sleep efficiency": "Total sleep time ÷ time in bed, as a percentage. >85% is typically good.",
+    "WASO": "Wake After Sleep Onset — minutes awake after first falling asleep. Higher = more fragmented.",
+    "Sleep latency": "Minutes from lights-out to the first epoch of sleep.",
+    "REM latency": "Minutes from sleep onset to the first REM period.",
+    "N3 latency": "Minutes from sleep onset to the first epoch of deep (N3) sleep.",
+    "Awakenings": "Number of times the patient transitioned from sleep to wake after first falling asleep.",
+    "TST": "Total Sleep Time — total minutes actually asleep (all stages summed).",
+}
+
+
 # --- clinical reference ("normal") ranges, adult AASM / sleep-medicine norms ---
 # Each entry: normal = [lo, hi] the value is expected to fall within for a
 # healthy adult; direction tells the UI which side is abnormal ("high" = only
@@ -215,7 +355,8 @@ def _flatten():
     lower-cased; index keys also stored without their unit suffix."""
     out = {}
     for src in (INDEX_GLOSSARY, STAGE_GLOSSARY, METRIC_GLOSSARY,
-                ROLE_GLOSSARY, FIELD_GLOSSARY, DYNAMICS_GLOSSARY):
+                ROLE_GLOSSARY, FIELD_GLOSSARY, DYNAMICS_GLOSSARY, NK_GLOSSARY,
+                REPORT_GLOSSARY):
         for k, v in src.items():
             out[k.lower()] = v
     return out
@@ -228,6 +369,8 @@ GLOSSARY = {
     "role": ROLE_GLOSSARY,
     "field": FIELD_GLOSSARY,
     "dynamics": DYNAMICS_GLOSSARY,
+    "nk": NK_GLOSSARY,
+    "report": REPORT_GLOSSARY,
     "ranges": REFERENCE_RANGES,
     "flat": _flatten(),
 }
