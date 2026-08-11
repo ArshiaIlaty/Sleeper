@@ -192,6 +192,12 @@ class Dataset:
                     os.remove(tmp)
                 raise RuntimeError(f"aws s3 cp physio failed: {err.strip()}")
             os.replace(tmp, dest)               # atomic publish
+            # `aws s3 cp` preserves the S3 object's (old) Last-Modified time as the
+            # local mtime; stamp it to NOW so the LRU eviction below treats this
+            # just-downloaded file as most-recently-used and never evicts it out
+            # from under the caller (else getmtime sees a week-old date and picks
+            # this very file as the oldest victim -> FileNotFoundError on read).
+            os.utime(dest, None)
         self._evict_cache()
         return dest
 
