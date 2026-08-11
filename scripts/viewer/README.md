@@ -91,6 +91,7 @@ frontend is one dependency-free `index.html` (vanilla JS + inline SVG).
 | `nk_features.py` | Per-sleep-stage physiological features via **NeuroKit2**: heart-rate variability (ECG), EEG complexity, and respiratory rate/variability — computed *within each stage* plus cross-stage contrasts (pure numpy + neurokit2) |
 | `export_nk_features.py` | CLI: stream the physiological EDFs → a wide per-recording **per-stage NeuroKit feature** CSV (companion to `export_features.py`; reads the big waveforms) |
 | `export_report_features.py` | CLI: stream the physiological EDFs → a wide per-recording **clinical-report feature** CSV (EEG spectral/spindles, SpO₂/hypoxic burden, respiratory events, REM density). Decodes only one EEG/SpO₂/EOG channel + `resp_caisr`; no ECG pass, so it is cheaper than the NK export. Merge with the other two CSVs on `(bids_folder, session)` |
+| `export_combined_features.py` | CLI: **single-pass driver** that opens each physio EDF once, decodes the union of channels both waveform exporters need, and writes BOTH the NK CSV and the report CSV together — halving S3 egress on the large cohort. `--shard`/`--nshards` stride-slice the cohort for parallel workers (each needs its own `PHYSIO_CACHE_DIR`). Outputs are schema-identical to the two standalone exporters |
 | `eeg_spectral.py` | Per-stage EEG spectral features (scipy): absolute + relative band power, **Theta/Alpha**, **Delta/Sigma**, **REM-slowing** `(δ+θ)/(α+σ+β)`, and **sleep-spindle** detection (11–16 Hz envelope → density/amplitude/duration in N2 & N3) |
 | `oxygenation.py` | SpO₂ features: scale-normalised (0–1 vs 0–100 auto-detect) mean/min/**T90**, **ODI**, desaturation depth stats, and **hypoxic burden** (Σ depth×duration per hour) |
 | `resp_events.py` | Respiratory-event features from `resp_caisr` (1 Hz): apnea/hypopnea/RERA **counts**, AHI/RDI, **event durations**, and SpO₂-derived **post-event overshoot** + **recovery time** |
@@ -217,6 +218,27 @@ already live in `nk_features_*.csv`. Skipping the whole-night R-peak detection
 makes it the cheaper waveform exporter (~2–5 s/recording). Merge all three CSVs
 (`features_*`, `nk_features_*`, `report_features_*`) on `(bids_folder, session)`
 to train on the full union.
+
+### One pass for both waveform CSVs on the large cohort (`export_combined_features.py`)
+
+Over the large (S3) cohort, running `export_nk_features.py` and
+`export_report_features.py` separately downloads every 170–460 MB EDF **twice**.
+This driver opens each EDF once, decodes the union of channels both need, and
+writes both CSVs. It is compute-bound (~25 s/recording), so it **shards** across
+CPU cores — each worker takes a stride of the cohort, writes its own CSV shards,
+and **must use its own `PHYSIO_CACHE_DIR`** (the on-disk cache's eviction lock is
+per-process):
+
+```bash
+# on pdmle, as arshia_ilaty_physio26 — launch 3 sharded workers, then merge:
+cd /data-temp/physio-viewer
+NSHARDS=3 DATASET=large bash large_combined_launch.sh   # -> exports/shards/*.csv
+# ...wait for all shards to finish (tail /tmp/combined_large_s*.log)...
+python3 merge_shards.py                                 # -> exports/{nk,report}_features_large.csv
+```
+
+The merged CSVs are schema-identical to the standalone exporters, so they stack
+with the standard-cohort CSVs.
 
 ## Notes
 
