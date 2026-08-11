@@ -24,6 +24,10 @@ exports/
 │   ├── epoch_eeg_<cohort>.csv           one row per (recording × stage × epoch)
 │   └── spindles_<cohort>.csv            one row per detected sleep spindle
 │
+├── quality/                         QUALITY · NeuroKit signal-quality scores + diagnostic plots
+│   ├── quality_<cohort>.csv             one row per recording (ECG/RSP quality, per-stage, channel sanity)
+│   └── plots/<cohort>/                  <bids>__ecg.png (nk.ecg_plot), <bids>__rsp.png (nk.rsp_plot)
+│
 └── shards/                          intermediate sharded outputs for the large-cohort runs
 ```
 
@@ -101,6 +105,30 @@ the per-recording `threshold_uv`. This is the raw form the `report_features`
 `spindle_*_amp_mean` / `dur_mean` and the `dispersion_features` spindle spreads were
 computed from; per-recording spindle counts match the aggregated `n_spindles`.
 
+### `quality/quality_<cohort>.csv` — NeuroKit signal QUALITY (`export_quality.py`)
+How clean the waveforms behind the HRV / respiratory features are — a QC audit and
+a candidate covariate / exclusion filter. One row per recording:
+- `ecg_q_{mean,median,pct_good,pct_bad}` — `nk.ecg_quality` averageQRS (per-sample
+  0–1 beat-template correlation), pooled over evenly-spaced 90 s windows; `pct_good`
+  = fraction ≥0.8, `pct_bad` = fraction <0.5. `ecg_n_beats` = beats used.
+- `ecg_zhao_verdict` — `nk.ecg_quality` zhao2018 categorical
+  (Excellent / Barely acceptable / Unacceptable) on a mid-recording window.
+- `ecg_q_<stage>` — mean ECG quality in the longest contiguous bout of each stage
+  (does signal quality itself vary by stage?).
+- `rsp_q_{mean,median,pct_good,pct_bad}` — `nk.rsp_quality`, same windowing.
+- `eeg_/eog_ {nan_frac, flat_frac, clip_frac}` — NeuroKit has no native EEG/EOG
+  quality score, so these channels get a flat-line / clipping / NaN sanity check.
+
+Quality is sampled (not whole-night: `ecg_quality` on 8 h @ 200 Hz is ~50 s/rec; a
+few 90 s windows are ~1–2 s and robust to a single artifact).
+
+### `quality/plots/<cohort>/` — NeuroKit diagnostic plots (`export_quality.py --plots`)
+Per recording: `<bids>__ecg.png` (`nk.ecg_plot` — R-peaks, cleaned trace,
+signal-quality band, instantaneous HR, average-beat morphology with P/Q/S/T
+delineation) and `<bids>__rsp.png` (`nk.rsp_plot` — raw/clean, breathing rate,
+amplitude, RVT, cycle symmetry), on a short mid-recording window. The `ecg_plot` /
+`rsp_plot` CSV columns hold each recording's PNG filename (blank if not plotted).
+
 ## Regenerating
 
 ```bash
@@ -114,6 +142,8 @@ python3 export_report_features.py     --dataset standard --out exports/report_fe
 python3 export_dispersion_features.py --dataset standard --out exports/dispersion_features_standard.csv
 # LONG — per-epoch tables
 python3 export_epoch_features.py      --dataset standard --outdir exports/per_epoch
+# QUALITY — NeuroKit signal-quality scores (+ --plots for ecg/rsp diagnostic PNGs)
+python3 export_quality.py             --dataset standard --outdir exports/quality --plots
 # ANALYSIS — univariate significance across all wide families
 python3 feature_significance.py       --exports exports --out exports/feature_significance_standard
 
