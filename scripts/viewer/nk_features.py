@@ -34,6 +34,14 @@ import warnings
 
 import numpy as np
 
+# NumPy renamed `trapz` -> `trapezoid` in 2.0; NeuroKit's frequency-domain HRV
+# (hrv_frequency -> signal_power) calls `np.trapezoid`, which is absent on the
+# box's NumPy <2.0. Without this alias every hrv_frequency call raises and is
+# swallowed by the try/except in `_hrv_from_rr`, silently blanking ALL lf/hf/lfhf/
+# lfn/hfn/tp columns. Aliasing restores the frequency-domain HRV.
+if not hasattr(np, "trapezoid") and hasattr(np, "trapz"):
+    np.trapezoid = np.trapz          # type: ignore[attr-defined]
+
 try:                                   # NeuroKit pulls in scipy/pandas/sklearn
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")

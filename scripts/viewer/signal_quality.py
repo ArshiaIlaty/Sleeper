@@ -36,6 +36,13 @@ import warnings
 
 import numpy as np
 
+# NumPy renamed `trapz` -> `trapezoid` in 2.0; NeuroKit's zhao2018 ECG-quality path
+# calls `np.trapezoid`, which is absent on the box's NumPy <2.0, so every zhao
+# verdict silently raised (caught in zhao_verdict) and serialised blank. Alias it
+# back so the categorical verdict works regardless of the installed NumPy.
+if not hasattr(np, "trapezoid") and hasattr(np, "trapz"):
+    np.trapezoid = np.trapz          # type: ignore[attr-defined]
+
 try:
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
@@ -209,26 +216,45 @@ def zhao_verdict(ecg, fs):
         return None
 
 
-def basic_channel_quality(sig, fs, prefix):
+def basic_channel_quality(sig, fs, prefix, flat_win_sec=1.0, flat_thresh=0.02):
     """Native-quality-free sanity check for EEG/EOG/EMG: NaN fraction, flat-line
-    fraction (near-zero derivative), and clipping fraction (at the signal's
-    min/max rails). All in [0,1]; higher NaN/flat/clip = worse."""
+    fraction, and clipping fraction (at the signal's min/max rails). All in [0,1];
+    higher NaN/flat/clip = worse.
+
+    flat_frac is **windowed** and resolution-independent: the signal is split into
+    `flat_win_sec` windows and a window counts as flat when its standard deviation
+    is below `flat_thresh` of the channel's own active level (the 90th percentile of
+    window SDs — the p90, not the median, so a channel that is dead for *most* of
+    the night, whose median SD is 0, still has a non-zero active reference). An
+    earlier per-sample derivative test (`|diff| < 1e-6*MAD`) collapsed to
+    "consecutive samples byte-identical", which on coarse-ADC sites (e.g. Emory's
+    ~2 uV EEG quantizer) flagged a fully live signal as ~70% flat. The windowed SD
+    ignores quantization (a live window still has real variance) yet still catches
+    genuine sustained dropout / dead channels (a frozen window has ~zero SD relative
+    to the active level). Calibrated on the standard cohort: at 2% of p90 all live
+    channels (Emory-quantized included) score <=0.005 while a 4.5 h frozen Kaiser
+    channel scores 0.68."""
     out = {f"{prefix}_nan_frac": None, f"{prefix}_flat_frac": None,
            f"{prefix}_clip_frac": None}
     if sig is None or fs <= 0 or sig.size == 0:
         return out
     x = np.asarray(sig, float)
-    n = x.size
     out[f"{prefix}_nan_frac"] = _r(np.mean(~np.isfinite(x)), 4)
     finite = x[np.isfinite(x)]
     if finite.size < 2:
         return out
-    d = np.abs(np.diff(finite))
-    scale = np.median(np.abs(finite - np.median(finite))) or 1.0
-    out[f"{prefix}_flat_frac"] = _r(np.mean(d < 1e-6 * scale), 4)
     lo, hi = np.min(finite), np.max(finite)
     rail = (np.isclose(finite, lo) | np.isclose(finite, hi))
     out[f"{prefix}_clip_frac"] = _r(np.mean(rail), 4)
+    # windowed flat-line detection, referenced to the channel's own active level
+    w = max(int(round(flat_win_sec * fs)), 2)
+    n_win = finite.size // w
+    if n_win < 1:
+        return out
+    w_std = finite[:n_win * w].reshape(n_win, w).std(axis=1)
+    active = float(np.percentile(w_std, 90))
+    flat = (w_std < flat_thresh * active) if active > 0 else (w_std <= 0)
+    out[f"{prefix}_flat_frac"] = _r(np.mean(flat), 4)
     return out
 
 

@@ -24,6 +24,10 @@ exports/
 │   ├── epoch_eeg_<cohort>.csv           one row per (recording × stage × epoch)
 │   └── spindles_<cohort>.csv            one row per detected sleep spindle
 │
+├── hrv/                             NON-AVG per-stage HRV (HRV is undefined per 30 s epoch)
+│   ├── hrv_windows_<cohort>.csv         LONG · one row per (recording × stage × ~120 s window)
+│   └── hrv_dispersion_<cohort>.csv      WIDE · per-stage SPREAD of the windowed HRV (SD/CV/pXX)
+│
 ├── quality/                         QUALITY · NeuroKit signal-quality scores + diagnostic plots
 │   ├── quality_<cohort>.csv             one row per recording (ECG/RSP quality, per-stage, channel sanity)
 │   └── plots/<cohort>/                  <bids>__ecg.png (nk.ecg_plot), <bids>__rsp.png (nk.rsp_plot)
@@ -42,7 +46,9 @@ exports/
 `dispersion_features` is the **non-avg** wide companion — the *spread* across a
 stage's epochs (SD, CV, and p10/p50/p90 + IQR for the flagship ratios). `per_epoch/`
 is the **long** companion — the raw per-epoch values the means and spreads were
-computed from.
+computed from. `hrv/` is the non-avg view for **HRV specifically**: HRV can't be
+computed per 30 s epoch, so its un-aggregated grain is a short ~120 s window of
+beats (`hrv_windows_` LONG + `hrv_dispersion_` WIDE) rather than one epoch.
 
 ## Join keys
 
@@ -105,6 +111,24 @@ the per-recording `threshold_uv`. This is the raw form the `report_features`
 `spindle_*_amp_mean` / `dur_mean` and the `dispersion_features` spindle spreads were
 computed from; per-recording spindle counts match the aggregated `n_spindles`.
 
+### `hrv/hrv_windows_<cohort>.csv` — LONG windowed HRV (`export_hrv_windows.py`)
+The non-avg form of `nk_features`' per-stage HRV. HRV is undefined per 30 s epoch
+(SDNN/RMSSD/LF-HF need many beats), so the un-aggregated grain is a short ~120 s
+**window of beats within a stage**. One row per (recording, stage, window):
+`stage`, `window_index`, `start_s`, `dur_s`, `n_beats`, then the linear HRV metrics
+`hr_mean`, `meannn`, `sdnn`, `rmssd`, `pnn50`, `sdsd`, `cvnn`, `sd1`/`sd2`/`sd1sd2`,
+and the frequency domain `lf`/`hf`/`lfhf`/`lfn`/`hfn`/`tp` (blank on windows under
+the ~50-beat frequency floor). R-peak detection, RR filtering, and the HRV
+definitions are `nk_features`' exact ones, so a window's HRV equals the pooled
+per-stage HRV over the same beats — only the aggregation grain differs.
+
+### `hrv/hrv_dispersion_<cohort>.csv` — WIDE per-stage HRV spread (`export_hrv_windows.py`)
+The wide non-avg companion (slots beside `dispersion_features`). Per stage
+(wake/n1/n2/n3/rem): `hrv_<stage>_n_windows`, then the SPREAD across that stage's
+windows — SD/CV + p10/p50/p90/IQR for the flagship `hr_mean`/`rmssd`/`sdnn`/`lfhf`,
+and SD/CV for `pnn50`/`cvnn`/`sd1sd2`/`lf`/`hf`. Summarises exactly the windows in
+`hrv_windows_<cohort>.csv` (a recomputed `mean` matches the long rows exactly).
+
 ### `quality/quality_<cohort>.csv` — NeuroKit signal QUALITY (`export_quality.py`)
 How clean the waveforms behind the HRV / respiratory features are — a QC audit and
 a candidate covariate / exclusion filter. One row per recording:
@@ -112,15 +136,27 @@ a candidate covariate / exclusion filter. One row per recording:
   0–1 beat-template correlation), pooled over evenly-spaced 90 s windows; `pct_good`
   = fraction ≥0.8, `pct_bad` = fraction <0.5. `ecg_n_beats` = beats used.
 - `ecg_zhao_verdict` — `nk.ecg_quality` zhao2018 categorical
-  (Excellent / Barely acceptable / Unacceptable) on a mid-recording window.
+  (Excellent / Barely acceptable / Unacceptable) on a mid-recording window. *(Needs
+  the `np.trapezoid` shim — see the note below; without it this column is blank.)*
 - `ecg_q_<stage>` — mean ECG quality in the longest contiguous bout of each stage
   (does signal quality itself vary by stage?).
 - `rsp_q_{mean,median,pct_good,pct_bad}` — `nk.rsp_quality`, same windowing.
 - `eeg_/eog_ {nan_frac, flat_frac, clip_frac}` — NeuroKit has no native EEG/EOG
-  quality score, so these channels get a flat-line / clipping / NaN sanity check.
+  quality score, so these channels get a sanity check. `flat_frac` is **windowed**
+  (fraction of 1 s windows whose SD is <2% of the channel's p90 active level), so
+  coarse-ADC quantization (e.g. Emory's ~2 µV EEG step) is **not** mistaken for a
+  dead channel; a genuinely frozen channel still flags high.
 
 Quality is sampled (not whole-night: `ecg_quality` on 8 h @ 200 Hz is ~50 s/rec; a
 few 90 s windows are ~1–2 s and robust to a single artifact).
+
+> **`np.trapezoid` gotcha (NumPy < 2.0 boxes):** NeuroKit's zhao2018 ECG quality and
+> its frequency-domain HRV (`hrv_frequency`) call `np.trapezoid`, added in NumPy 2.0.
+> On the pdmle box (NumPy < 2.0) those calls raise `AttributeError`, which the
+> extractors' `try/except` swallow — silently blanking `ecg_zhao_verdict` **and every
+> `lf`/`hf`/`lfhf`/`lfn`/`hfn`/`tp` HRV column**. `signal_quality.py` and
+> `nk_features.py` now alias `np.trapezoid = np.trapz` at import, so re-runs populate
+> these. If you see those columns empty after a NeuroKit/NumPy upgrade, this is why.
 
 ### `quality/plots/<cohort>/` — NeuroKit diagnostic plots (`export_quality.py --plots`)
 Per recording: `<bids>__ecg.png` (`nk.ecg_plot` — R-peaks, cleaned trace,
@@ -142,6 +178,8 @@ python3 export_report_features.py     --dataset standard --out exports/report_fe
 python3 export_dispersion_features.py --dataset standard --out exports/dispersion_features_standard.csv
 # LONG — per-epoch tables
 python3 export_epoch_features.py      --dataset standard --outdir exports/per_epoch
+# NON-AVG HRV — long windowed HRV + wide per-stage dispersion (one ECG pass)
+python3 export_hrv_windows.py         --dataset standard --outdir exports/hrv
 # QUALITY — NeuroKit signal-quality scores (+ --plots for ecg/rsp diagnostic PNGs)
 python3 export_quality.py             --dataset standard --outdir exports/quality --plots
 # ANALYSIS — univariate significance across all wide families
