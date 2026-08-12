@@ -9,6 +9,121 @@ Legend: ✅ done & verified · 🔬 verified against data · 📌 needs follow-u
 
 ---
 
+## 2026-08-12 (SleepFM embedding fusion) — QC + leakage-safe fuse into the model
+
+A teammate (Kingson) produced **SleepFM per-stage PSG embeddings** →
+`/data-temp/embeddings_by_stage/` (1080 `.npy`, one per recording, world-readable).
+Task: QC them and, if clean, fuse with our NK2+report features and re-benchmark.
+
+### QC ✅ 🔬 (`/tmp/qc_embeddings*.py`, run on box)
+- **Structure:** 1080 files, all uniform `(2560,)` float; **2560 = 5 stages × 512-d**
+  (Wake/N1/N2/N3/REM). Missing-stage blocks are **zeroed** — on 93/120 spot-checked
+  recordings the all-zero 512-blocks *exactly* match the stages absent from that
+  night's hypnogram; zero-block frequency highest for N3 (12%) / N1 (9%), the rarest
+  stages. 🔬
+- **Numerics:** 0 NaN / 0 inf / 0 all-zero / 0 constant / 0 dead dims; **1080/1080
+  unique rows** (no dup/copy-paste); roughly standardized (global mean≈0, std≈0.78).
+- **Alignment:** all 1080 map to a cohort recording (subject id); 23 of our 1103 have
+  no embedding → get a zero vector + `has_emb=0` flag. One embedding per subject (no
+  session ambiguity).
+- **Provenance:** SleepFM = self-supervised contrastive foundation model, **not**
+  trained on CI labels and not on this cohort → no label leakage from the embedder.
+
+### Fusion benchmark (`/tmp/fuse_eval.py`) — leakage-safe ✅
+Approach 1 (chosen over "concat-then-PCA", which lets 2560 emb dims drown the ~200
+features). **PCA(32) on the embedding block AND the AUROC>0.6 univariate filter are
+fit IN-FOLD on training rows only** — never on val/test (avoids selection leakage,
+which at 84 positives biases test AUROC +0.05–0.10). **Age dropped from features**
+(per user; challenge scoring is age-conditioned) but kept for scoring/stratification.
+Balanced 70/15/15 stratified on **label × site × sex × age-bin** (label-first is the
+critical stratifier at 7.6% prevalence); scored through the **exact production stack**
+(feature_prep site-MoE + Kaiser fine-tune + BMI imputer; `evaluate_model.compute_*`),
+so numbers are comparable to the 0.176 LOSO anchor.
+
+Initial 5-seed result (LOSO gate): **`plus_noage + emb_pca32 + AUC>0.6` → pooled LOSO
+reward +0.253** (vs 0.176 anchor, +44%), improving every held-out site incl. the hard
+BIDMC (+0.05→+0.21). BUT: `emb_pca32 only` is **LOSO AUROC 0.498 (chance)** — embeddings
+carry in-distribution structure but ~no *site-transferable* CI signal alone (random-CV
+0.66 was in-distribution flattery). And 70/15/15 disagreed with LOSO, all dominated by
+variance (~13 test positives; reward std ≈ mean). 📌
+
+### Confirmatory pass (`/tmp/fuse_confirm.py`) 📌 IN PROGRESS
+To separate "embeddings help" from "AUC>0.6 selection helps": adds an **isolation
+config** `plus_noage + AUC>0.6` (no embeddings), **paired per-seed deltas** on identical
+splits, **20 seeds** for a 70/15/15 CI, and a **bootstrap 95% CI on pooled LOSO reward**.
+Result pending (`/tmp/fuse_confirm.log`) — will decide whether the embeddings earn a
+place or the win is just regularization.
+
+⚠️ Do NOT quote +0.253 as a win until the CI/isolation confirms the embeddings add
+signal beyond feature selection.
+
+---
+
+## 2026-08-12 (Signal-feature artifacts) — significance, dispersion, per-epoch, quality, non-avg HRV
+
+A run of work making the signal-feature outputs durable, complete, and presentable,
+plus a same-harness benchmark of the NK2+report features vs the verified baseline.
+All exports under `/data-temp/physio-viewer/exports/` (world-readable; teammates pull
+over their own SSH), cataloged in `scripts/viewer/EXPORTS_MANIFEST.md`.
+
+### Benchmark: NK2+report features vs baseline (bench harness) 🔬
+Same folds, only the feature set changes (`bench/run_local_cv.py`, production model +
+scoring). **Pooled LOSO reward 0.098 (baseline, 55 feat) → 0.176 (plus NK+report, 337
+feat)** — nearly 2×, improving every held-out site (Kaiser flips −0.10→+0.42). ⚠️ The
+baseline landed at **0.098, not the 0.168 anchor** — this harness ("production site-MoE
++ Kaiser + BMI-impute") is not identical to whatever produced 0.168; the *relative* lift
+is trustworthy, the *absolute* number needs reconciling before quoting vs leaderboard.
+70/15/15 was noisy (337-feat reward std > mean, AUROC slightly down) → the raw union
+overfits; **feature selection is the next step** (borne out by the embedding pass above). 📌
+
+### Univariate feature significance — `scripts/viewer/feature_significance.py` ✅ (committed ddb01dd)
+Durable replacement for the ad-hoc `feat_auroc.py` (which only printed). Per feature:
+AUROC, |AUROC−0.5| effect, direction, Mann-Whitney U + tie-corrected z + two-sided p
+(via `math.erf`, no scipy), BH-FDR q. Grouped demographic / baseline / nk / report;
+writes `.csv` (all) + `.md` (presentable per-group tables). 🔬 331 features on the
+1090-rec cohort: age AUROC **0.772** (top), plmi 0.642, nk `hrv_sleep_sd1sd2` 0.637,
+report `eeg_n1_theta_alpha` 0.636. Caught & fixed a baseline-contamination bug (the
+nk/rep join mutated shared row dicts → snapshot `base_header` before the join).
+
+### Non-avg / long / quality exports ✅ (committed 983d82c, dd3a2be, 6e4200d)
+- `stage_dispersion.py` + `export_dispersion_features.py` — within-stage **SPREAD**
+  (SD/CV/pXX) of the mean-collapsed per-epoch values. **1090 × 265 cols.** Recomputed
+  mean matches the mean CSVs to 5e-5. 🔬
+- `epoch_features.py` + `export_epoch_features.py` — **LONG** per-epoch tables in
+  `exports/per_epoch/`: `epoch_eeg_standard.csv` **970,662 rows × 25** (one per
+  recording×stage×epoch), `spindles_standard.csv` **222,111 rows × 11** (one per
+  spindle). Verified the long table = averaged extractor under the same 180-epoch
+  subsample (4.77e-5). 🔬
+- `signal_quality.py` + `export_quality.py` — **NeuroKit signal-quality** scores +
+  diagnostic plots. **1090 × 35 cols + 2,155 PNGs** (`nk.ecg_plot`/`nk.rsp_plot`).
+  Cohort QC 🔬: ECG averageQRS mean **0.825** (71% ≥0.8, 0% unusable), RSP 0.753,
+  ECG quality stable across stages; EEG/EOG electrically clean (≈0% NaN/clip).
+
+### Fixes from the quality-CSV review ✅ (committed 40195ab)
+- **`ecg_zhao_verdict` empty for all 1090:** NeuroKit's zhao2018 path calls
+  `np.trapezoid` (NumPy ≥2.0), absent on the box's NumPy <2.0 → raised & swallowed.
+  **Same bug silently blanks frequency-domain HRV** (lf/hf/lfhf/lfn/hfn/tp) in any
+  fresh `nk_features` re-run. Fix: alias `np.trapezoid=np.trapz` at import in
+  `signal_quality.py` + `nk_features.py`. 🔬 verified verdicts + 727/730 HRV windows
+  now carry lfhf. (See memory `neurokit-numpy-trapezoid-gotcha`.)
+- **EEG `flat_frac` over-sensitive:** old per-sample `|diff|<1e-6·MAD` collapsed to
+  "consecutive samples byte-identical" → Emory's ~2 µV EEG quantizer read as ~70%
+  flat. Fix: **windowed** SD-vs-active-level (1 s windows, flat if SD < **2% of p90**).
+  Calibrated on cohort 🔬: live channels (Emory-quantized incl.) ≤0.005, a 4.5 h frozen
+  Kaiser channel 0.68. p90 (not median) so a mostly-dead channel still flags.
+
+### Non-avg per-stage HRV — `scripts/viewer/hrv_windows.py` + `export_hrv_windows.py` ✅ (committed 40195ab)
+`nk_features` gives one *pooled* HRV number per stage; the dispersion family never
+covered HRV. HRV is undefined per 30 s epoch, so the un-aggregated grain is a **~120 s
+window of beats within a stage**. Long `hrv_windows_<cohort>.csv` (one row per
+recording×stage×window) + wide `hrv_dispersion_<cohort>.csv` (per-stage SD/CV/pXX).
+Reuses `nk_features`' exact R-peak detection + `_hrv_from_rr`, so a window's HRV
+matches the pooled per-stage definition. 🔬 dispersion mean == long-row mean to 1e-4;
+smoke ~230 windows/rec, 0 errors, ~4 s/rec. Full standard-cohort run + a quality
+re-export (fixed zhao + flat_frac, scores only — plots unaffected) chained on the box.
+
+---
+
 ## 2026-08-10 (Clinical report) — EEG spectral/spindles, hypoxic burden, resp events, Tier-1/2 report
 
 Built the sleep-quality + clinical-marker feature families the team prioritised,
