@@ -65,6 +65,18 @@ POOL_TAG = {5: "wake", 3: "n1", 2: "n2", 1: "n3", 4: "rem"}
 RR_MIN_MS, RR_MAX_MS = 300.0, 2000.0
 MIN_BEATS_TIME = 30                                 # below this, HRV time-domain -> NaN
 MIN_BEATS_FREQ = 50                                 # frequency domain needs more beats
+# Nonlinear HRV (DFA fractal scaling + sample entropy). DFA alpha1 needs a couple
+# of windows at its largest box size (16 beats); alpha2 at 64. Sample entropy is
+# O(n^2), so the RR series is subsampled to a cap before it runs (bounds cost the
+# same way EEG complexity caps its epochs). All hand-rolled -> no O(n^2) blow-up
+# from nk.hrv_nonlinear / nk.fractal_* (see module header on avoided calls).
+DFA_A1_SCALES = (4, 16)                             # short-term scaling box sizes (beats)
+DFA_A2_SCALES = (16, 64)                            # long-term scaling box sizes (beats)
+DFA_MIN_POINTS = 4                                  # need >=4 (log n, log F) points to fit
+SAMPEN_MIN_BEATS = 50
+SAMPEN_MAX_BEATS = 1200                             # cap RR length before O(n^2) SampEn
+SAMPEN_M = 2                                         # template length
+SAMPEN_R = 0.2                                       # tolerance = R * SD(rr)
 # EEG complexity cost control: decimate each analysed epoch to <= this many
 # samples (keeps entropy_sample, which is O(n^2), fast at any sampling rate), and
 # analyse at most this many epochs per stage (sampled evenly across the stage).
@@ -133,6 +145,103 @@ def _poincare(rr_ms):
     sd2 = float(np.sqrt(sd2_sq)) if sd2_sq > 0 else np.nan
     ratio = (sd1 / sd2) if (np.isfinite(sd1) and np.isfinite(sd2) and sd2 > 0) else np.nan
     return sd1, sd2, ratio
+
+
+def _dfa_alpha(rr_ms, scales):
+    """Detrended-fluctuation-analysis scaling exponent alpha over `scales` (box
+    sizes in beats). Returns None if the series is too short for the range.
+
+    Standard DFA (Peng 1995): integrate the mean-removed series, split into
+    non-overlapping boxes of size n, remove a per-box least-squares line, take the
+    RMS of the residual as F(n), then fit log F(n) vs log n. alpha is the slope.
+    Hand-rolled in numpy (no O(n^2)); cost is ~O(N log N) over the scale range.
+    """
+    x = np.asarray(rr_ms, float)
+    x = x[np.isfinite(x)]
+    lo, hi = scales
+    if x.size < hi * 2:                              # need >=2 boxes at the largest size
+        return None
+    y = np.cumsum(x - x.mean())                      # integrated profile
+    # log-spaced box sizes across [lo, hi] (integers, unique)
+    ns = np.unique(np.floor(np.logspace(np.log10(lo), np.log10(hi), 8)).astype(int))
+    ns = ns[(ns >= lo) & (ns <= hi) & (ns >= 4)]
+    logn, logf = [], []
+    for n in ns:
+        n_box = y.size // n
+        if n_box < 2:
+            continue
+        seg = y[:n_box * n].reshape(n_box, n)
+        # Closed-form per-box linear detrend, vectorised over ALL boxes at once
+        # (no per-box polyfit loop): with centered time tc, the LS line is
+        # mean(seg) + slope*tc where slope = (seg @ tc) / sum(tc^2); residual is
+        # seg minus that. This is the DFA hotspot on the big NREM/sleep RR pools.
+        t = np.arange(n, dtype=float)
+        tc = t - t.mean()
+        denom = float(np.dot(tc, tc))                # sum(tc^2), same for every box
+        row_mean = seg.mean(axis=1, keepdims=True)
+        slope = (seg @ tc) / denom if denom > 0 else np.zeros(n_box)
+        fit = row_mean + slope[:, None] * tc         # (n_box, n) fitted lines
+        resid_sq = float(np.sum((seg - fit) ** 2))
+        f = np.sqrt(resid_sq / (n_box * n))
+        if f > 0:
+            logn.append(np.log(n))
+            logf.append(np.log(f))
+    if len(logn) < DFA_MIN_POINTS:
+        return None
+    slope = float(np.polyfit(logn, logf, 1)[0])
+    return slope if np.isfinite(slope) else None
+
+
+def _sampen(rr_ms, m=SAMPEN_M, r=SAMPEN_R):
+    """Sample entropy of an RR series (ms). r is a fraction of the series SD.
+
+    SampEn = -ln(A/B): B = # template pairs (length m) within tolerance, A = # that
+    stay within tolerance when extended to m+1. O(n^2); the series is subsampled to
+    SAMPEN_MAX_BEATS first so the cost is bounded regardless of stage length.
+    """
+    x = np.asarray(rr_ms, float)
+    x = x[np.isfinite(x)]
+    if x.size < SAMPEN_MIN_BEATS:
+        return None
+    if x.size > SAMPEN_MAX_BEATS:                    # evenly subsample to cap O(n^2)
+        x = x[np.linspace(0, x.size - 1, SAMPEN_MAX_BEATS).astype(int)]
+    sd = float(np.std(x))
+    if sd <= 0:
+        return None
+    tol = r * sd
+    n = x.size
+    # Richman-Moorman SampEn: BOTH the length-m and length-(m+1) template sets use
+    # the SAME n-m starting indices (0..n-m-1), so every m-template has a valid
+    # (m+1)-extension. Using range(n-mm) instead would give the m+1 set one fewer
+    # template and bias SampEn high in a length-dependent way. Chebyshev distance;
+    # each unordered pair counted once (the ordered/unordered choice cancels in A/B).
+    n_tmpl = n - m
+    def _count(mm):
+        tmpl = np.array([x[i:i + mm] for i in range(n_tmpl)])
+        if tmpl.shape[0] < 2:
+            return 0
+        cnt = 0
+        for i in range(tmpl.shape[0] - 1):
+            d = np.max(np.abs(tmpl[i + 1:] - tmpl[i]), axis=1)
+            cnt += int(np.count_nonzero(d <= tol))
+        return cnt
+    B = _count(m)
+    A = _count(m + 1)
+    if B == 0 or A == 0:
+        return None
+    return float(-np.log(A / B))
+
+
+def _hrv_nonlinear(rr_ms):
+    """Nonlinear HRV from a per-stage RR series (ms): DFA alpha1 (short-term
+    fractal scaling), alpha2 (long-term), and sample entropy. Reuses the same
+    clean RR array `ecg_hrv_by_stage` already built; returns a dict of value|None.
+    """
+    return {
+        "dfa_a1": _r(_dfa_alpha(rr_ms, DFA_A1_SCALES), 4),
+        "dfa_a2": _r(_dfa_alpha(rr_ms, DFA_A2_SCALES), 4),
+        "sampen": _r(_sampen(rr_ms), 4),
+    }
 
 
 def _hrv_from_rr(rr_ms, fs):
@@ -219,17 +328,25 @@ def ecg_hrv_by_stage(ecg, fs, stage_codes):
     rr_ms = rr_ms[good]
     beat_stage = beat_stage[good]
 
+    # per stage/pool: linear HRV (+ closed-form Poincare) then merge the
+    # nonlinear block (DFA alpha1/alpha2 + sample entropy) computed on the SAME
+    # clean RR array, so the extra features cost no additional peak detection.
+    def _stage_hrv(sel):
+        d = _hrv_from_rr(sel, fs)
+        d.update(_hrv_nonlinear(sel))
+        return d
+
     stages = {}
     for code in STAGE_ORDER:
         sel = rr_ms[beat_stage == code]
         if sel.size:
-            stages[POOL_TAG[code]] = _hrv_from_rr(sel, fs)
+            stages[POOL_TAG[code]] = _stage_hrv(sel)
     nrem = rr_ms[np.isin(beat_stage, NREM_CODES)]
     if nrem.size:
-        stages["nrem"] = _hrv_from_rr(nrem, fs)
+        stages["nrem"] = _stage_hrv(nrem)
     sleep = rr_ms[np.isin(beat_stage, SLEEP_CODES)]
     if sleep.size:
-        stages["sleep"] = _hrv_from_rr(sleep, fs)
+        stages["sleep"] = _stage_hrv(sleep)
 
     return {
         "ok": True,
@@ -264,6 +381,11 @@ def _hrv_contrasts(stages):
         "rem_nrem_hr_delta": delta(g("rem", "hr_mean"), g("nrem", "hr_mean")),
         "wake_sleep_hr_delta": delta(g("wake", "hr_mean"), g("sleep", "hr_mean")),
         "n3_wake_rmssd_ratio": ratio(g("n3", "rmssd"), g("wake", "rmssd")),
+        # nonlinear cross-stage modulation: fractal scaling and complexity should
+        # shift between REM (sympathetic) and NREM (vagal); a blunted shift is the
+        # autonomic-dysregulation marker this module targets.
+        "rem_nrem_dfa_a1_ratio": ratio(g("rem", "dfa_a1"), g("nrem", "dfa_a1")),
+        "rem_nrem_sampen_ratio": ratio(g("rem", "sampen"), g("nrem", "sampen")),
     }
     # spread of HR / RMSSD across the individual stages (blunted -> small)
     hrs = [_finite(g(POOL_TAG[c], "hr_mean")) for c in STAGE_ORDER]
@@ -431,7 +553,7 @@ def _flat_hrv(prefix, stages, contrasts):
         s = stages.get(tag) or {}
         for feat in ["hr_mean", "sdnn", "rmssd", "pnn50", "sdsd", "cvnn",
                      "sd1", "sd2", "sd1sd2", "lf", "hf", "lfhf", "lfn", "hfn",
-                     "tp", "n_beats"]:
+                     "tp", "dfa_a1", "dfa_a2", "sampen", "n_beats"]:
             row[f"{prefix}_{tag}_{feat}"] = s.get(feat)
     for k, v in (contrasts or {}).items():
         row[f"{prefix}_{k}"] = v
@@ -481,7 +603,8 @@ def _build_columns():
         "ecg": {"ok": True, "stages": {}, "contrasts": {
             "rem_nrem_rmssd_ratio": None, "rem_nrem_lfhf_ratio": None,
             "rem_nrem_hr_delta": None, "wake_sleep_hr_delta": None,
-            "n3_wake_rmssd_ratio": None, "stage_hr_range": None,
+            "n3_wake_rmssd_ratio": None, "rem_nrem_dfa_a1_ratio": None,
+            "rem_nrem_sampen_ratio": None, "stage_hr_range": None,
             "stage_rmssd_cv": None}},
         "eeg": {"ok": True, "stages": {}, "contrasts": {"n3_wake_sampen_ratio": None}},
         "rsp": {"ok": True, "stages": {}},

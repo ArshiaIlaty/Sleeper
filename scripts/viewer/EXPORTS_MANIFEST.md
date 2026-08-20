@@ -13,7 +13,9 @@ exports/
 ├── EXPORTS_MANIFEST.md              ← this file
 │
 ├── features_<cohort>.csv            WIDE · CAISR sleep architecture + demographics
-├── nk_features_<cohort>.csv         WIDE · per-stage NeuroKit HRV / EEG-complexity / resp   (stage MEAN)
+├── arch_features_<cohort>.csv       WIDE · stage-transition Markov matrix + microarousal distributions (CAISR only)
+├── nk_features_<cohort>.csv         WIDE · per-stage NeuroKit HRV (incl. nonlinear DFA/SampEn) / EEG-complexity / resp  (stage MEAN)
+├── micro_features_<cohort>.csv      WIDE · sleep microstructure — SO-spindle coupling + RSWA (chin-EMG) + CAP
 ├── report_features_<cohort>.csv     WIDE · EEG spectral / spindles / SpO₂ / resp-events      (stage MEAN)
 ├── dispersion_features_<cohort>.csv WIDE · within-stage SPREAD of the above (SD/CV/pXX)      (NON-AVG)
 │
@@ -68,12 +70,53 @@ transition dynamics, preprocessing deltas, event indices (AHI, arousal, PLMI +
 subtypes), demographics, and the `Cognitive_Impairment` label. Reads only the small
 CAISR annotation files (no waveforms).
 
+### `arch_features_<cohort>.csv` — transition Markov + microarousals (`export_arch_features.py`)
+CAISR-annotation-only (no waveforms), so fast over the whole cohort. Two families:
+- **Stage-transition Markov (F1):** the full 5×5 row-normalised transition
+  probabilities `trans_p_<from>_<to>` (from/to ∈ wake/n1/n2/n3/rem), per-row
+  conditional entropy `trans_entropy_<from>` (normalised by log 5), the
+  occupancy-weighted `trans_entropy_rate` (overall architecture disorder) and
+  `trans_stability_index` (mean self-transition / persistence). Complements
+  `features_`' six named per-hour transition *rates* with the normalised
+  probabilities + their entropies. Uses raw stage codes (spikes are fragmentation).
+- **Microarousal distributions (A1):** beyond `features_`' single `arousal_index`,
+  the arousal event-**duration** distribution (`arousal_dur_{mean,median,sd,max}_s`),
+  the **inter-arousal-interval** distribution (`arousal_iai_{mean,median}_s`,
+  `arousal_iai_cv` — high CV = clustered/periodic arousal), and the **per-stage
+  arousal index** `arousal_idx_<stage>` (arousals per hour spent in each stage).
+  The arousal stream's sampling rate is read from the EDF (`arousal_fs`; 2 Hz on
+  this cohort), so durations/onsets are in real seconds.
+
 ### `nk_features_<cohort>.csv` — per-stage NeuroKit, MEAN (`export_nk_features.py`)
 Per stage (wake/n1/n2/n3/rem + pooled nrem/sleep): ECG-HRV (HR, SDNN, RMSSD, pNN50,
-SDSD, CVNN, LF, HF, LF/HF, SD1/SD2), EEG sample/permutation entropy (mean + one SD),
-respiratory rate (mean, SD, CV), plus cross-stage contrasts (REM/NREM ratios,
-wake–sleep HR delta, HR range). Decodes one ECG + one central EEG + one effort
-channel.
+SDSD, CVNN, LF, HF, LF/HF, SD1/SD2), **nonlinear HRV (DFA α1 short-term + α2
+long-term fractal scaling, sample entropy `sampen`)**, EEG sample/permutation
+entropy (mean + one SD), respiratory rate (mean, SD, CV), plus cross-stage
+contrasts (REM/NREM RMSSD/LF-HF/DFA/SampEn ratios, wake–sleep HR delta, HR range).
+Decodes one ECG + one central EEG + one effort channel. DFA is closed-form
+vectorised and SampEn is length-capped, so the O(n²) `nk.hrv_nonlinear` is avoided
+(see `nk_features.py` header).
+
+### `micro_features_<cohort>.csv` — sleep microstructure (`export_micro_features.py`)
+One physio-EDF pass decoding one central EEG + one chin EMG (+ the CAISR arousal
+stream). Three families (all *dynamic instability* markers, the axis our error
+analysis flags):
+- **SO–spindle coupling (B3)** `couple_<n2|n3|nrem>_*`: `coupling_strength` (mean
+  resultant vector length of the slow-oscillation phase at each spindle peak, [0,1]),
+  `preferred_phase_{cos,sin}`, `modulation` (Rayleigh z), `n_spindles`. Reduced
+  coupling = memory-consolidation / cognitive-decline biomarker. Spindle detection +
+  threshold reuse `eeg_spectral` (N2/N3 calibrated identically).
+- **RSWA / atonia (E2)** `rswa_*`: chin-EMG tone in REM, normalised to the
+  recording's own atonia floor (montage-robust): `rswa_tonic_tone_ratio`,
+  `rswa_rem_nrem_ratio` (>1 = REM not the quietest stage), `rswa_tonic_fraction`,
+  `rswa_phasic_per_min`, `rswa_rem_rms_cv`. REM-sleep-without-atonia is a prodromal
+  α-synuclein-neurodegeneration marker.
+- **CAP (A2, approximate)** `cap_*`: `cap_rate` (fraction of NREM in CAP sequences —
+  flagship; calibrated to the ~0.3–0.5 adult range via `ACT_FRAC`), `cap_a_index`,
+  `cap_a{1,2,3}_pct`, `cap_a{1,3}_index`, `cap_mean_{a,b}_dur_s`, `cap_n_sequences`.
+  A transparent surrogate for Terzano CAP scoring (2 s band-power activation vs a
+  moving background; A-phase subtypes from spectral content + arousal overlap), NOT
+  clinical scoring — documented in `cap_events.py`.
 
 ### `report_features_<cohort>.csv` — clinical-report signal markers, MEAN (`export_report_features.py`)
 Per-stage EEG spectral (abs/rel band power, Theta/Alpha, Delta/Sigma, REM-slowing),
@@ -171,8 +214,10 @@ amplitude, RVT, cycle symmetry), on a short mid-recording window. The `ecg_plot`
 # on pdmle, as arshia_ilaty_physio26, from /data-temp/physio-viewer
 # WIDE — CAISR only (fast, no waveforms)
 python3 export_features.py            --dataset standard --out exports/features_standard.csv
+python3 export_arch_features.py       --dataset standard --out exports/arch_features_standard.csv
 # WIDE — waveform means
 python3 export_nk_features.py         --dataset standard --out exports/nk_features_standard.csv
+python3 export_micro_features.py      --dataset standard --out exports/micro_features_standard.csv
 python3 export_report_features.py     --dataset standard --out exports/report_features_standard.csv
 # WIDE — non-avg dispersion
 python3 export_dispersion_features.py --dataset standard --out exports/dispersion_features_standard.csv
