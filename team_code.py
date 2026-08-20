@@ -439,13 +439,15 @@ def predict_from_features(model, feats: np.ndarray, age: float, site: str) -> tu
     infer_n = model.get("kaiser_alt_n_features") if use_alt else n_features
 
     feats = np.asarray(feats, dtype=np.float32).ravel()
-    if infer_n and feats.size != infer_n:
-        fixed = np.full(infer_n, np.nan, dtype=np.float32)
-        fixed[: min(infer_n, feats.size)] = feats[:infer_n]
-        feats = fixed
-    elif n_features and feats.size != n_features:
-        fixed = np.full(n_features, np.nan, dtype=np.float32)
-        fixed[: min(n_features, feats.size)] = feats[:n_features]
+    # Pad/truncate to the width the CHOSEN model expects. infer_n is already the
+    # right target (kaiser_alt_n_features when use_alt, else n_features); a prior
+    # `elif n_features` branch here re-padded the Kaiser alt vector (42) back up to
+    # n_features (54), crashing the 42-feature Kaiser head -> every I0006 record
+    # silently scored 0.0. Always target infer_n.
+    target_n = infer_n or n_features
+    if target_n and feats.size != target_n:
+        fixed = np.full(target_n, np.nan, dtype=np.float32)
+        fixed[: min(target_n, feats.size)] = feats[:target_n]
         feats = fixed
     X = feats.reshape(1, -1)
     if bmi_imputer and not use_alt:
