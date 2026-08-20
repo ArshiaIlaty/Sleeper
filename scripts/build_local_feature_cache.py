@@ -52,6 +52,8 @@ NON_FEATURE = {
     "ecg_channel", "eeg_channel", "rsp_channel", "spo2_channel", "eog_channel",
     "has_resp_caisr", "report_seconds", "nk_seconds",
     "n_beats_total", "n_beats_clean",
+    "arousal_fs", "n_epochs_scored",
+    "emg_channel", "micro_seconds",
 }
 
 
@@ -64,6 +66,20 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--limit", type=int, default=None)
     args = ap.parse_args()
+
+    # Fail fast: prove we can WRITE the output BEFORE spending ~1.5h extracting
+    # features. (A root-owned --out dir vs. an mlusers run process silently cost a
+    # full recompute once — never again.)
+    os.makedirs(args.out, exist_ok=True)
+    probe = os.path.join(args.out, ".write_probe")
+    try:
+        with open(probe, "w") as fh:
+            fh.write("ok")
+        os.remove(probe)
+    except OSError as e:
+        sys.exit(f"FATAL: cannot write to --out {args.out!r}: {e}. "
+                 f"Fix dir ownership/permissions before running (this script "
+                 f"computes for ~1.5h before the final write).")
 
     # import team_code from the repo checkout
     if args.repo not in sys.path:
@@ -81,11 +97,30 @@ def main():
     rep = {r.get("bids_folder", ""): r for r in load_csv(os.path.join(args.exports, "report_features_standard.csv"))}
     nk_cols = [c for c in next(iter(nk.values())).keys() if c not in NON_FEATURE]
     rep_cols = [c for c in next(iter(rep.values())).keys() if c not in NON_FEATURE]
+    # architecture/arousal CAISR features (F1 transition Markov + A1 microarousals).
+    # Optional: absent until export_arch_features.py has been run -> falls back to
+    # no arch block so the cache still builds.
+    arch_path = os.path.join(args.exports, "arch_features_standard.csv")
+    arch = {r.get("bids_folder", ""): r for r in load_csv(arch_path)} if os.path.exists(arch_path) else {}
+    if arch:                                          # present AND has data rows
+        arch_cols = [c for c in next(iter(arch.values())).keys() if c not in NON_FEATURE]
+    else:
+        arch_cols = []
+        print(f"NOTE: {arch_path} missing or empty -> building cache WITHOUT the arch block")
+    # sleep-microstructure features (B3 SO-spindle coupling + E2 RSWA + A2 CAP).
+    # Optional, same fallback as the arch block.
+    micro_path = os.path.join(args.exports, "micro_features_standard.csv")
+    micro = {r.get("bids_folder", ""): r for r in load_csv(micro_path)} if os.path.exists(micro_path) else {}
+    if micro:
+        micro_cols = [c for c in next(iter(micro.values())).keys() if c not in NON_FEATURE]
+    else:
+        micro_cols = []
+        print(f"NOTE: {micro_path} missing or empty -> building cache WITHOUT the micro block")
 
     X_base, X_plus, y, ages, sites, pids = [], [], [], [], [], []
     base_names = None
     plus_names = None
-    n_nk_miss = n_rep_miss = 0
+    n_nk_miss = n_rep_miss = n_arch_miss = n_micro_miss = 0
 
     from tqdm import tqdm
     for rec in tqdm(records, unit="rec"):
@@ -116,10 +151,21 @@ def main():
         rep_vec = np.array([_f(p.get(c)) if p else np.nan for c in rep_cols], dtype=np.float32)
         if p is None:
             n_rep_miss += 1
+        a = arch.get(pid)
+        arch_vec = np.array([_f(a.get(c)) if a else np.nan for c in arch_cols], dtype=np.float32)
+        if arch_cols and a is None:
+            n_arch_miss += 1
+        mi = micro.get(pid)
+        micro_vec = np.array([_f(mi.get(c)) if mi else np.nan for c in micro_cols], dtype=np.float32)
+        if micro_cols and mi is None:
+            n_micro_miss += 1
 
-        plus_vec = np.concatenate([feats, nk_vec, rep_vec]).astype(np.float32)
+        plus_vec = np.concatenate([feats, nk_vec, rep_vec, arch_vec, micro_vec]).astype(np.float32)
         if plus_names is None:
-            plus_names = list(names) + ["nk__" + c for c in nk_cols] + ["rep__" + c for c in rep_cols]
+            plus_names = (list(names) + ["nk__" + c for c in nk_cols]
+                          + ["rep__" + c for c in rep_cols]
+                          + ["arch__" + c for c in arch_cols]
+                          + ["micro__" + c for c in micro_cols])
 
         X_base.append(feats)
         X_plus.append(plus_vec)
@@ -159,8 +205,10 @@ def main():
           f"prevalence={y.mean():.3f}")
     print(f"sites: {dict(zip(*np.unique(sites, return_counts=True)))}")
     print(f"baseline features (team_code extract_all): {Xb.shape[1]}")
-    print(f"plus features (+nk {len(nk_cols)} +report {len(rep_cols)}): {Xp.shape[1]}")
-    print(f"nk rows missing: {n_nk_miss} | report rows missing: {n_rep_miss}")
+    print(f"plus features (+nk {len(nk_cols)} +report {len(rep_cols)} "
+          f"+arch {len(arch_cols)} +micro {len(micro_cols)}): {Xp.shape[1]}")
+    print(f"nk rows missing: {n_nk_miss} | report rows missing: {n_rep_miss} "
+          f"| arch rows missing: {n_arch_miss} | micro rows missing: {n_micro_miss}")
     print(f"wrote caches to {args.out}")
 
 
