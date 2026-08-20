@@ -9,6 +9,65 @@ Legend: ✅ done & verified · 🔬 verified against data · 📌 needs follow-u
 
 ---
 
+## 2026-08-20 (ARCH BLOCK PORTED into submission + harmonization tested/rejected) ✅🔬
+
+Two levers explored to lift results, decided by a fixed-cohort feature ablation (the large-cohort
+0.87-AUROC win was mostly the 6× positives, NOT the features — standard-cohort 438-feat 80/20
+AC-AUROC 0.618 ≈ ~55-feat LOSO 0.635, so at fixed cohort the extra features barely move the
+*within-distribution* metric). The honest gate is: **does a block add signal OVER the shipped
+autonomic+CAISR core on cross-site LOSO?** Ran `scripts/ablation_on_prodcore.py` on the plus cache
+(core already includes whole-night autonomic HRV/SpO2 — the earlier CSV ablation lacked it, so its
+arch/micro gains were partly just *recovering* autonomic). Verdict vs prod_core (LOSO AC-AUROC):
+`+arch +0.034` (reward@pi +0.145→+0.233), `+micro −0.003` (recovers autonomic, dilutes arch),
+`+nk −0.022` (hurts, needs neurokit2), `+rep +0.055`, `ALL +0.062`. micro helped 80/20 (+0.036)
+but hurt LOSO — overfits-to-distribution; for a cross-site challenge, LOSO is trusted.
+
+**Ported the arch block only** (surgical, low-risk): vendored a self-contained `arch_features.py`
+at repo root (pure numpy; inlines the 3 `dynamics.py` symbols; CAISR-annotation-only, NO neurokit2,
+NO waveform decode; NOT dockerignored → ships in the container). Added `extract_arch_features` to
+`team_code.py`, captured `arousal_caisr` sampling rate from the fs-dict the caisr load already
+returns (was discarded), gated on a new `include_arch` preset flag, added it to `submit`. Kaiser
+alt head extracts with `caisr_autonomic` (no arch) so it stays 42 features — the 0.0 fix untouched.
+`submit` now **54 → 99 features**. rep NOT ported: 122 features for a similar LOSO delta but with
+container-dependency cost and no in-memory-annotation shortcut — a reasonable fast-follow, not a
+deadline-day change.
+
+**Verified two ways.** (1) **Value-parity** (`scripts/verify_arch_parity.py`): team_code's arch
+extraction on 40 real records × 45 features = **0 mismatches** vs the validated `arch_features_
+standard.csv` block (max abs diff 1.46e-05, float32 rounding) → the ablation's measured lift
+transfers to the submission unchanged, no 9h waveform LOSO rerun needed. (2) **Frozen harness**
+end-to-end (`train_model.py`→`run_model.py`, 60-record subset): trains clean at 99 features, all 60
+records score across 3 sites, **I0006 scores normally (0.40, no 0.0 regression)**, no errors,
+infer well within time limit, valid output CSV (`Cognitive_Impairment` bool + `_Probability`),
+model.sav 181KB. (Uniform 0.40 = isotonic calibrator saturating on the degenerate balanced subset;
+spreads out on the real cohort.)
+
+**Harmonization tested and REJECTED** (`scripts/harmonize_loso.py`): per-site robust z-score
+(median/IQR) to attack the flat LOSO transfer. baseline pooled AC-AUROC 0.635 (matches anchor).
+`adaptive` (each site scaled by its OWN stats incl. held-out — non-deployable ceiling): pooled
+−0.022 but lifts minority sites (Emory +0.05, Kaiser +0.08). `deployable` (train-site stats;
+unseen held-out site → global fallback): pooled −0.039, and HURTS Kaiser (−0.048, reward
++0.412→+0.117) exactly because the held-out site gets mismatched global stats. Pooled is 78% BIDMC,
+which harmonization slightly hurts. No robust shippable win → NOT adopted. ⚠️ The minority-site
+ceiling lift suggests real transferable location/scale structure, but we can't exploit it per-record
+at inference. 📌 Possible follow-up: harmonize only when the test site IS in training (multi-site
+holdouts), or learn a site-invariant representation — out of scope for deadline day.
+
+---
+
+## 2026-08-20 (Random 80/20 within-distribution eval — LOSO counter-check) 🔬✅
+
+User concern: is LOSO unfairly pessimistic vs an in-distribution test set? Ran `scripts/
+random_split_eval.py` (50 seeds; train .68/val .12/**test .20** — val carved from the 80% dev so
+threshold-free primary metrics are a clean 80/20 while reward thresholds still get a val slice).
+STANDARD (n=1090): AC-AUROC **0.618±0.073**, AUROC 0.672, AUPRC 0.200 — lands right on the LOSO
+anchor (0.635), so LOSO is NOT being pessimistic at fixed cohort. LARGE (n=6530): AC-AUROC
+**0.828±0.023**, AUROC 0.864, AUPRC 0.418 — the +0.21 jump is the 6× positives (same 438 features),
+with ~2× variance collapse. Confirms: positives fix within-distribution; features (esp. arch) are
+what move cross-site.
+
+---
+
 ## 2026-08-20 (SUBMISSION BUG FIXED — Kaiser head silently scored 0.0 for every I0006 record) 🐛✅
 
 End-to-end submission-harness verification (`train_model.py` → `run_model.py`, the frozen scripts
