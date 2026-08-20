@@ -53,6 +53,7 @@ from feature_prep import (  # noqa: E402
     predict_with_kaiser_override,
     threshold_for_patient,
 )
+import arch_features  # noqa: E402  (vendored, self-contained; CAISR-annotation-only)
 
 DEFAULT_PRESET = "submit"
 EXTRACT_CACHE_PRESET = "extract_all"
@@ -329,6 +330,18 @@ def extract_caisr_features(algo_data):
         return _safe([], len(names)), names
 
 
+def extract_arch_features(algo_data, arousal_fs):
+    """Sleep-architecture transition-Markov (F1) + microarousal-distribution (A1)
+    features from the CAISR annotation dict. Fixed-order 45-vector, NaN for any
+    missing stream/value; never raises. Ablation-backed cross-site lift over the
+    autonomic+CAISR core (LOSO AC-AUROC +0.034). See arch_features.py."""
+    try:
+        return arch_features.feature_vector(algo_data or {}, arousal_fs)
+    except Exception:
+        names = list(arch_features.ARCH_FEATURE_COLUMNS)
+        return _safe([], len(names)), names
+
+
 def extract_demographic_features(data, include_age: bool = True):
     names = []
     vals = []
@@ -405,21 +418,34 @@ def extract_all_features(record, data_folder, csv_path=DEFAULT_CSV_PATH, preset=
         blocks_feat.append(a_feat)
         blocks_name.extend(a_names)
 
-    if cfg.get("include_caisr"):
+    if cfg.get("include_caisr") or cfg.get("include_arch"):
         algo_file = _resolve_edf(
             os.path.join(data_folder, ALGORITHMIC_ANNOTATIONS_SUBFOLDER, sid),
             pid, sess, suffix="_caisr_annotations")
+        algo, algo_fs = None, None
         try:
             if algo_file and os.path.exists(algo_file):
-                algo, _ = load_signal_data(algo_file)
-                c_feat, c_names = extract_caisr_features(algo)
-                del algo
-            else:
-                c_feat, c_names = extract_caisr_features({})
+                algo, algo_fs = load_signal_data(algo_file)
         except Exception:
-            c_feat, c_names = extract_caisr_features({})
-        blocks_feat.append(c_feat)
-        blocks_name.extend(c_names)
+            algo, algo_fs = None, None
+
+        if cfg.get("include_caisr"):
+            try:
+                c_feat, c_names = extract_caisr_features(algo if algo else {})
+            except Exception:
+                c_feat, c_names = extract_caisr_features({})
+            blocks_feat.append(c_feat)
+            blocks_name.extend(c_names)
+
+        if cfg.get("include_arch"):
+            # arousal_caisr sampling rate comes from the fs dict returned alongside
+            # the annotation streams (do NOT assume 1/2 Hz; it varies by site).
+            arousal_fs = (algo_fs or {}).get("arousal_caisr") if algo_fs else None
+            a_feat, a_names = extract_arch_features(algo, arousal_fs)
+            blocks_feat.append(a_feat)
+            blocks_name.extend(a_names)
+
+        del algo
 
     feats = np.hstack(blocks_feat).astype(np.float32) if blocks_feat else np.array([], dtype=np.float32)
     return feats, blocks_name

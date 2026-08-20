@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 PRESETS = {
-    # Default Challenge submission: no age, no EEG, CAISR + autonomic + other demographics.
+    # Default Challenge submission: no age, no EEG, CAISR + autonomic + other
+    # demographics, plus the architecture transition/arousal block (ablation-backed
+    # cross-site lift over autonomic+CAISR: LOSO AC-AUROC +0.034, reward@pi +0.088).
     "submit": {
         "include_demo": "no_age",
         "include_autonomic": True,
         "include_caisr": True,
+        "include_arch": True,
     },
     # Sleep physiology only — best LOSO reward in ablation when age removed.
     "caisr_autonomic": {
