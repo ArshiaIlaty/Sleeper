@@ -1,12 +1,12 @@
-# Paper & Proposal — PhysioNet Challenge 2026 (Team SDG)
+# Paper & Proposal — PhysioNet Challenge 2026
 
-| File | What it is |
-|---|---|
-| `RESEARCH_PROPOSAL.md` | Scientific rationale for the current system + prioritized improvement roadmap (Tiers 1–3) |
-| `cinc2026_sdg.tex` | Publishable paper in Computing in Cardiology (CinC) format — submit after the official phase |
-| `cinc2026_sdg.md` | Readable Markdown mirror of the paper (same content, no LaTeX needed to review) |
-| `refs.bib` | BibTeX references |
-| `figures/` | Publication figures (PNG + PDF) from `scripts/eda/make_figures.py`, built on real dataset numbers |
+| File                     | What it is                                                                                         |
+| ------------------------ | -------------------------------------------------------------------------------------------------- |
+| `RESEARCH_PROPOSAL.md` | Scientific rationale for the current system + prioritized improvement roadmap (Tiers 1–3)         |
+| `cinc2026_sdg.tex`     | Publishable paper in Computing in Cardiology (CinC) format — submit after the official phase      |
+| `cinc2026_sdg.md`      | Readable Markdown mirror of the paper (same content, no LaTeX needed to review)                    |
+| `refs.bib`             | BibTeX references                                                                                  |
+| `figures/`             | Publication figures (PNG + PDF) from`scripts/eda/make_figures.py`, built on real dataset numbers |
 
 ## Figures (§2.2 Dataset characteristics)
 
@@ -43,6 +43,7 @@ bibtex   cinc2026_sdg
 pdflatex cinc2026_sdg.tex
 pdflatex cinc2026_sdg.tex
 ```
+
 (No LaTeX toolchain was available in the authoring environment, so the `.tex` has **not**
 been compile-tested — do a first build locally and fix any missing-package warnings.)
 

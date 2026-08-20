@@ -95,3 +95,6 @@ credentials.json
 *.sh
 
 *.md
+*.txt
+*.png
+*.pdf
