@@ -9,6 +9,64 @@ Legend: ✅ done & verified · 🔬 verified against data · 📌 needs follow-u
 
 ---
 
+## 2026-08-20 (TRACK 2 — full-feature submission built: signal block ported into the container) ✅🔬
+
+**Two-submission strategy.** Track 1 (repo root, `submit` preset, 99 features) is the LOSO-tuned
+cross-site entry — done, committed, audited. Track 2 (`track2/`, new `submit_full` preset, 336
+signal features on top of the T1 core) is the **within-distribution champion**, hedging the
+same-3-sites-vs-new-sites unknown: if the hidden test set is held-out patients from the same 3
+sites, the full feature set wins big (438-feat 80/20 AC-AUROC ~0.83 vs LOSO ~0.635). Two dockers,
+one per hypothesis.
+
+**The port.** The nk/report/micro feature families lived ONLY as offline cache-builder scripts in
+`scripts/viewer/` that read raw EDF on the box and wrote CSVs — never wired into the frozen
+container. Track 2 ports them to run at INFERENCE. New `track2/sig_features/` package vendors the 8
+compute modules **verbatim** (only cross-imports made package-relative — verified byte-identical to
+the viewer originals otherwise) + the two helpers their exporters relied on from the viewer's
+`app.py`/`preprocess.py`: `channel_role` (montage→role) and `smooth_stages` (CAISR-staging
+preprocessing). `sig_features.signal_feature_row()` reproduces the three exporters' exact per-record
+recipe (channel picking → per-stage functions → fixed-order flatten) in one physio pass → 336
+floats (183 nk + 122 report + 31 micro), NaN on any miss, never raises. Wired into `team_code.py`
+via `extract_signal_features` + `include_signal` preset flag; physio EDF loaded ONCE (shared with
+autonomic block). Single pooled/site-MoE head — `KAISER_ALT_PRESET=None` for T2 (the 42-feat alt is
+T1-specific, would clash with the full vector). **Stage-code convention verified identical**
+(5=W,4=REM,3=N1,2=N2,1=N3) between team_code and the viewer modules → per-stage features don't
+scramble.
+
+**Deps.** `neurokit2==0.2.10` + hard deps `matplotlib==3.9.2`/`requests==2.34.2` — exact versions a
+teammate's submission proved install on `python:3.10.1-buster`. Container uses numpy 2.0.2, so the
+`np.trapezoid` gotcha (frequency-HRV blanking on numpy<2) is MOOT. Dockerfile byte-identical to T1
+(DO-NOT-EDIT lines intact); `.dockerignore` doesn't exclude `sig_features/`.
+
+**Verification (on box, 20 real records):** value-parity (`track2/verify_sig_parity.py`) vs the
+validated offline `*_features_standard.csv` — box neurokit is 0.2.13 (matches how the CSVs were
+built) so it's a clean recipe/wiring check. **`nk__` (183 feats) and `report__` (122 feats) are
+BYTE-PERFECT** — 0 NaN-pattern disagreements, 0 value mismatches, max rel-diff 5.9e-08 (float32
+rounding). **`micro__` (31): RSWA + CAP byte-perfect; only the SO-spindle `couple_*` family drifts
+~1-5%** (80 cells >2%). Root cause is benign + explained: coupling is the ONLY feature that runs a
+full-signal Hilbert transform (slow-osc phase at each spindle peak), which is length-sensitive, and
+the offline export decoded with `edfio ... lazy_load_data=True` while the container's
+`helper_code.load_signal_data` uses `lazy_load_data=False` → a ULP/1-sample length delta shifts
+every phase slightly (the 510× "max rel-diff" is a `preferred_phase_sin` sign-flip near zero, abs
+diff ~0.29). PROOF it's not a wiring bug: report's per-epoch spindle detection matched byte-perfect
+(same detector, reproducible), and CAP/RSWA (envelope/RMS, length-robust) matched perfectly.
+**Train and inference share the same in-container path → the model is self-consistent; the drift is
+only vs the offline CSV, in the lowest-ROI micro sub-family. PASS.** Frozen-harness train on the
+60-record `submit_test_t2` slice trained + saved a valid `model.sav` at **435 features**
+(demo+autonomic+caisr+arch+336 signal) — the wiring end-to-end works. `site_models=[]` on this slice
+is expected small-slice fallback (Track 1 shows the same on 60 recs; per-site MoE fits on the real
+~1090). **BUG FOUND + FIXED via the harness:** the first train logged 15× `channel_table.csv not
+found` — I'd scaffolded track2 without copying `channel_table.csv` (the montage-rename table the
+autonomic block needs; `DEFAULT_CSV_PATH = <team_code dir>/channel_table.csv`), so autonomic HRV/SpO2
+silently degraded. Copied it into `track2/` (byte-identical, not dockerignored) and retrained clean (0 errors).
+**Frozen-harness END-TO-END PASS:** retrain → `run_model.py` on the 60-record holdout slice scored
+all 60 records, all 3 sites (I0002/I0006/S0001, 20 each), **0 exact-0.0 probs → no Kaiser padding
+regression**, ~15s/record (well within budget). Every prob = 0.400 (base rate) — a tiny-slice
+calibration artifact, NOT a bug: Track 1 produces the identical flat 0.400 on this same slice (the
+real ~1090-record set gives the proper spread). Local wiring smoke test (synthetic signals,
+scipy-only) confirmed report/micro compute. **Track 2 is submission-ready.** See
+[[challenge-2026-approach]], [[track2-signal-port]].
+
 ## 2026-08-20 (ARCH BLOCK PORTED into submission + harmonization tested/rejected) ✅🔬
 
 Two levers explored to lift results, decided by a fixed-cohort feature ablation (the large-cohort

@@ -1,0 +1,49 @@
+# Git and editor metadata
+.git
+.gitignore
+.cursor
+.cursorindexingignore
+.vscode
+.idea
+.specstory
+
+# Local data, caches, and experiment outputs (not used inside the image)
+data/
+.s3_cache/
+eda/
+logs/
+smoke_test/
+outputs/
+models/
+checkpoints/
+runs/
+wandb/
+
+# Dev / research scripts (submission uses root team_code.py only)
+scripts/
+claude/
+download_to_s3.py
+create_labels.py
+
+# Python and ML artifacts
+__pycache__/
+*.py[cod]
+*.pkl
+*.joblib
+*.sav
+*.h5
+*.hdf5
+*.pt
+*.pth
+*.onnx
+
+# Logs and misc local files
+*.log
+kaggle_to_s3.log
+
+# Secrets (never bake into an image)
+.env
+.env.*
+!.env.example
+*.pem
+credentials.json
