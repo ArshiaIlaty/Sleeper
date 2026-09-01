@@ -9,6 +9,173 @@ Legend: ✅ done & verified · 🔬 verified against data · 📌 needs follow-u
 
 ---
 
+## 2026-08-28 (End-to-end supervised fine-tuning of the V2 EEG encoder) ⚠️
+
+**Why.** All 9 prior JEPA runs used the encoder as a **frozen** feature extractor (pool CLS
+descriptors → night vector → GBM) and hit the same wall: the SSL rep is redundant with the
+handcrafted-EEG champion under LOSO / n_pos=84. This drops that assumption — the last untested
+JEPA lever. Init the encoder from the label-free V2 pretrain and **fine-tune it end-to-end** with
+the CI label through a stage-aware attentive-pooling (MIL) night head. Different failure mode; the
+real risk is overfitting 84 positives across 3 sites, so heavy regularization: freeze the low-level
+patch conv + chan-emb, low encoder LR (3e-5) / high head LR (5e-4), dropout 0.4, WD 0.05,
+class-balanced batches (half pos / half neg), bag-resampled K=48 epochs/night as augmentation.
+
+- **Model** — `scripts/jepa/finetune_v2.py`: V2 backbone (teacher init) → per-epoch CLS descriptor
+  → Ilse-et-al. gated-attention pool over a night's epochs (+ stage embedding) → linear head.
+  Produces **out-of-fold** probabilities (each night scored by a model that never trained on it)
+  for both **LOSO** and **LOPO** (5-fold StratifiedGroupKFold by pid); model reinit per fold from
+  the teacher (no cross-fold leak). `scripts/jepa/ft_eval.py`: three arms on the SAME folds/rows as
+  the frozen screens — champion (436 feats → GBM), jepa-ft (ft OOF prob used directly), fusion
+  ([436 feats, ft OOF prob] → GBM; the ft prob is a valid OOF feature) — same fitter / AC-AUROC /
+  reward / paired-bootstrap protocol, so the verdict is directly comparable to all 9 prior screens.
+  Training loss descended cleanly every fold (≈0.70→0.60); the encoder-init pretrain saw all nights
+  label-free, so both headlines carry the same mild shared-pretrain optimism as V2.
+- ⚠️ **RESULT — NO-SHIP #10** (but the *least-bad* JEPA result to date). On the 1082-night EEG-packed
+  subset (y+=83); the champion anchor is lower here than the 0.6352 headline because the subset
+  excludes 21 non-EEG-packed recordings — all arms are on identical rows/folds (fair paired test).
+  - **LOSO:** champion AC-AUROC **0.5682** / AUROC 0.6670 / reward +0.1281; jepa-ft (alone) 0.5507 /
+    0.6196 / +0.0520; fusion 0.5712 / 0.6692 / +0.1325. Δ[fusion−champion] AC-AUROC **+0.0031
+    [−0.0077, +0.0135]**, reward +0.0047 [−0.0153, +0.0268]; Δ[jepa-ft−champion] AC-AUROC −0.0176
+    [−0.0998, +0.0622].
+  - **LOPO:** champion AC-AUROC **0.6389** / AUROC 0.7666 / reward +0.1777; jepa-ft (alone) 0.6070 /
+    0.6761 / +0.1677; fusion 0.6383 / 0.7568 / +0.0606. Δ[fusion−champion] AC-AUROC **−0.0007
+    [−0.0275, +0.0263]** (dead neutral), reward −0.1172 [−0.3013, +0.0104]; Δ[jepa-ft−champion]
+    AC-AUROC −0.0307 [−0.1117, +0.0499].
+- **What's new vs the 9 frozen screens.** For the first time fusion does **not hurt** the champion:
+  LOSO Δ AC-AUROC is *positive* (+0.0031) and LOPO is dead neutral (−0.0007) — every frozen screen
+  landed −0.03 to −0.04. End-to-end fine-tuning stopped the rep from degrading the champion, but it
+  still adds **no significant lift** on the primary threshold-free metric under either CV (both CIs
+  span 0). jepa-ft alone underperforms the champion (expected: one balanced-trained sigmoid vs the
+  full 436-feature GBM). The LOPO fusion **reward** drop (−0.1172) is a thresholding artifact of the
+  class-balanced ft sigmoid reshaping the GBM's ranking near the prevalence cut — AC-AUROC, the
+  challenge-primary metric, is the one that's neutral.
+- **Verdict.** Dropping the frozen-embedding assumption is the last distinct JEPA failure mode, and
+  it produces neutral-at-best fusion. **10 consecutive NO-SHIPs across every axis** (per-epoch EEG
+  V1/V2, multimodal, night-dynamics, end-to-end fine-tune) → the wall is n_pos=84 / 3-site LOSO, not
+  the architecture or the frozen-vs-tuned choice. JEPA exploration is exhausted; closing it.
+  Artifacts (box): `ftprob_site.npz`, `ftprob_patient.npz`, `ft_train_{site,patient}.log`,
+  `ft_eval_{site,patient}.log`.
+
+---
+
+## 2026-08-28 (Level-2 hierarchical night-JEPA + Exp-C stage-conditioned prediction-error) ⚠️
+
+**Why.** All 8 prior JEPA runs pooled *per-epoch* reps into a night vector and hit the same
+wall: the SSL rep is redundant with (or worse than) the handcrafted-EEG champion under LOSO /
+n_pos=84. This attacks the **one untested axis — night *dynamics*** (30s → 5-min → whole-night),
+which is exactly where our error analysis says the CI signal lives (blunted cross-stage dynamics).
+Built on the *one* representation that carried real signal: the V2 EEG per-epoch CLS descriptor
+(jepa-only AUROC 0.629), not the diluted multimodal one. Gated under **LOSO** (comparable to all
+prior) **and LOPO** (5-fold StratifiedGroupKFold by pid — the user's ask for tighter CIs).
+
+- **Model** — `scripts/jepa/night_jepa.py`: (L1) reuse the frozen V2 EEG teacher to encode every
+  packed epoch → `l1_epemb` (974,482×128); (L2) pool 10 epochs = one 5-min block + majority stage
+  → per-night sequence of block tokens (median 91 blocks/night); a small night-transformer
+  (d128/depth4) + **temporal I-JEPA** — mask a contiguous span of blocks, EMA teacher, narrow
+  cross-attn predictor fills masked block latents from mask-token + block-pos/stage embeddings,
+  smooth-L1 on EMA-teacher LN reps. Label-free single all-nights pretrain (60 ep, 51 s on T4,
+  loss 0.33→0.008 — night block-sequences are far more predictable than raw epochs).
+- **Exp-C (the actual new hypothesis)** — at embed time, mask each block one-at-a-time and predict
+  it from the rest → a per-block *surprise*; aggregate glob {mean,max,cv} + per-stage mean (5) +
+  cross-stage modulation → stage-conditioned prediction-error features. Hypothesis: CI = blunted /
+  disorganized stage-conditioned surprise.
+- **Gate change** — added `--cv patient` (LOPO-style StratifiedGroupKFold by pid) to
+  `jepa_gate_ab.py`; default `--cv site` (LOSO) unchanged, so all 8 prior verdicts stay comparable.
+- ⚠️ **RESULT — NO-SHIP #9.** champion (LOSO) AC-AUROC **0.6352** / AUROC 0.7117 / reward +0.2738.
+  - **LOSO:** jepa-only AC-AUROC 0.5757 / **AUROC 0.6323** / reward +0.0209 (real label-free signal,
+    ≈ V2's 0.629); fusion 0.5994 / 0.7003 / +0.2115. Δ[fusion−champion] AC-AUROC **−0.0361
+    [−0.0893, +0.0126]** (spans 0, leans neg); Δ[jepa-only−champion] −0.0579 [−0.1301, +0.0116].
+  - **LOPO** (tighter CIs, as asked): champion AC-AUROC 0.6249 / AUROC 0.7610 / reward +0.2195;
+    fusion 0.5912 / 0.7338 / +0.2899. Δ[fusion−champion] AC-AUROC **−0.0344 [−0.0810, +0.0111]**
+    (tighter than LOSO but lower bound still negative); reward Δ +0.0719 [−0.0769, +0.2598] (spans 0);
+    Δ[jepa-only−champion] AC-AUROC −0.0906 [−0.1647, −0.0186] (sig worse).
+  - **Exp-C features carry only weak signal** — best `expc_glob_mean` whole-cohort (optimistic, no CV)
+    AUROC 0.594, below the in-fold 0.6 filter; per-stage means 0.52–0.57. The "blunted stage-conditioned
+    surprise" hypothesis gets weak-at-best support and does not survive CV.
+- **Verdict.** Night-dynamics is the last untested JEPA axis, and it reproduces the exact pattern of
+  the other 8: a genuine label-free rep that adds **nothing** over handcrafted EEG on the primary
+  AC-AUROC under either CV. **9 consecutive NO-SHIPs** → the wall is n_pos=84 / 3-site LOSO, not the
+  architecture. Recommend closing the JEPA exploration. Artifacts (box): `encoder_l2_all.pt`,
+  `emb_l2_all.npz` (1082×905 = 128×7 pools + 9 Exp-C), `l1_epemb.npy`, `l2_blocks.npz`,
+  `l2_gate_{loso,lopo}.log`.
+
+---
+
+## 2026-08-27 (Multimodal PSG-JEPA — 15-channel extractor + presence-aware I-JEPA) 🔬📌
+
+**Direction:** challenge deadline passed → pure exploration, NO shippable/frozen-container
+constraint. Eval is **LOSO** (leave-one-site-out) primary, compared against the champion
+handcrafted model (LOSO **AC-AUROC 0.6352 / AUROC 0.7117 / reward +0.2738**). GPU authorized
+and fixed: box has a Tesla T4 16 GB; the user-site torch was cu130 (too new → CUDA unavailable),
+so an isolated venv `exports/jepa/gpuenv` runs `torch==2.5.1` (cu124 ≤ the T4's CUDA 12.5).
+
+**Why multimodal.** The raw-EEG JEPA (V2, below) learned a *genuine* self-supervised
+representation but it was **redundant** with the 436 handcrafted EEG features — no LOSO lift.
+The one remaining orthogonal-signal lever is the non-EEG PSG the champion under-exploits:
+ECG/HRV, respiration, SpO2, EOG/EMG. This experiment feeds the validated V2 recipe the full
+15-channel montage so cross-modal structure (apnea→desaturation, arousal↔HRV, REM EOG/EMG
+atonia) can surface as signal handcrafted per-signal features flatten out.
+
+- **Extractor** — `scripts/jepa/export_raw_multimodal.py`: 15 canonical slots (6 EEG
+  F3/F4/C3/C4/O1/O2 + ECG + 2 EOG + chin EMG + airflow + chest/abd effort + SpO2 + leg EMG),
+  role-gated by `app.channel_role` with cue disambiguation; CAR over present EEG only,
+  per-channel robust z-score (±8, also fixes the 854 `uV`-mislabeled SpO2), require ≥5/6 EEG.
+- **Cross-site canonicalization VERIFIED** 🔬 — the montage channel *names* differ by site
+  (Kaiser unreferenced). Full pack: **974,482 epochs / 1082 nights**, sites S0001 845 /
+  I0006 190 / I0002 47, 83 positive nights; **every one of the 15 slots present ≥99.4%**
+  across all three sites; sample epoch shows real per-slot variance (not zero-fill).
+- **Model** — `scripts/jepa/raw_mm_jepa.py`: V2 extended to N_CH=15 (450 tokens/epoch) with
+  **presence-aware I-JEPA** — absent channels are zero-filled but excluded everywhere (padded
+  out of encoder attention via `src_key_padding_mask`, never sampled as I-JEPA context/target,
+  dropped from the CLS readout); `night_chan_mask` stored in the pack index, looked up per epoch.
+  Same emb.npz schema + LOSO gate (`jepa_gate_ab.py`) as V1/V2 for a directly comparable verdict.
+- ⚠️ **RESULT — NO-SHIP #8, WORSE than EEG-only.** champion AC-AUROC 0.6352 / AUROC 0.7117;
+  multimodal jepa-only 0.5113 / **0.4997 (literal chance)**; fusion 0.6003 / 0.6838.
+  Δ[fusion−champion] AC-AUROC −0.0349 [−0.0864,+0.0189] (leans neg, spans 0);
+  Δ[jepa-only−champion] −0.1242 [−0.2370, **−0.0084**] (significantly worse). Pretrain ran
+  ~7 h on the T4 (loss plateaued ~0.131). **Adding the 9 non-EEG channels *diluted* the
+  representation** — EEG-only V2 jepa-only was AUROC 0.629 (real signal), multimodal fell to
+  0.4997 (chance). Diagnosis: the single CLS readout over 15 heterogeneous modalities washes
+  out the EEG structure (where all 8 experiments locate the CI signal); SpO₂ is near-flat within
+  a 30 s epoch, effort/EMG noisy. The cross-modal-coupling hypothesis (apnea↔desat, arousal↔HRV
+  the champion under-exploits) is **rejected at chance level**. Consistent finding across all 8
+  JEPA NO-SHIPs: the wall is the data (83 positives / 3-site LOSO), not the representation.
+  Cheap unrun diagnostic: re-pool the trained encoder's per-token reps by modality group
+  (embed-only, ~15 min) to separate readout-dilution from no-signal — but a rescue's ceiling is
+  "neutral fusion" since the EEG group is redundant (V2). Remaining lever = Level-2 temporal/
+  hierarchical night-JEPA + Exp-C stage-conditioned prediction-error, ideally under LOPO.
+
+## 2026-08-26 (Raw-signal JEPA on GPU — V1 chance, borrowed fixes → V2 genuine but redundant) 🔬⚠️
+
+Escalation from a Stage-1 light TS-JEPA screen (data2vec over per-epoch EEG *summary* features:
+jepa-only AC-AUROC 0.514, fusion 0.6046 — encoder compressed away signal, NO-SHIP) to raw
+multichannel EEG on the GPU. Pipeline: `scripts/jepa/export_raw_eeg.py` decodes 6 scalp
+derivations → CAR → 64 Hz → robust z-score → stage-aligned 30 s epochs → per-recording npz;
+`raw_eeg_jepa.py`/`_v2.py` pack → memmap, pretrain (label-free, all nights), embed
+(stage-aware night pooling, 768-d), gate under LOSO. Encoder is label-free so a single
+all-nights pretrain doesn't leak the target; LOSO is enforced in the GBM head.
+
+- **V1 (data2vec-style): NO-SHIP.** jepa-only AUROC **0.5030 (literal chance)**; fusion 0.6734;
+  Δ[fusion−champion] AC-AUROC −0.039 [−0.098,+0.024] (spans 0). Root causes: channel-mixed
+  `Conv1d(6→d)` erased topography, in-place masking too easy, mean-of-LayerNorm'd tokens washed
+  out the night vector.
+- **Borrowed-repos escalation** (user unblocked `git clone`). Cloned ECG-JEPA (kweimann),
+  eeg-vjepa (amir-hojjati), PhysioJEPA (benmfox), signaljepa (eugenehp) — code only (HF weights
+  blocked). Three convergent fixes folded onto V1: (1) per-channel (C×T) patch tokens + learned
+  channel-embeddings (topography); (2) **I-JEPA masking** — context encoder sees only kept tokens,
+  narrow predictor (dim/2) fills masked targets from mask-token + target pos-emb, smooth-L1 on
+  EMA-teacher LayerNorm'd latents; (3) CLS/register-token readout. AdamW betas (0.9,0.99),
+  WD-exclude bias/norm, EMA momentum 0.998→0.9999.
+- **V2 (`raw_eeg_jepa_v2.py`): NO-SHIP #7, but METHOD VALIDATED.** champion AC-AUROC 0.6352 /
+  AUROC 0.7117; jepa-only 0.5963 / **0.6294**; fusion 0.6253 / 0.6801. Δ[fusion−champion]
+  AC-AUROC **−0.0113 [−0.0870,+0.0680]** (spans 0, ~neutral); Δ[jepa-only−champion] −0.0380
+  [−0.1389,+0.0638]. The borrowed recipe **worked at the representation level** — jepa-only AUROC
+  went 0.5030 (chance) → 0.6294 (real label-free SSL signal), and fusion went from *hurting* the
+  champion (V1 −0.039) to ~neutral. But the V2 embedding is **redundant** with the 436 handcrafted
+  EEG features → no LOSO lift. ⚠️ Ceiling is the data: **83 positive nights across 3 sites** under
+  LOSO — the same wall as the 7 prior NO-SHIPs. Conclusion: single-modality raw-EEG JEPA is genuine
+  but adds nothing over handcrafted EEG; next lever = multimodal (2026-08-27 entry).
+
 ## 2026-08-20 (TRACK 2 — full-feature submission built: signal block ported into the container) ✅🔬
 
 **Two-submission strategy.** Track 1 (repo root, `submit` preset, 99 features) is the LOSO-tuned
