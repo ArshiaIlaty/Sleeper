@@ -9,6 +9,275 @@ Legend: ✅ done & verified · 🔬 verified against data · 📌 needs follow-u
 
 ---
 
+## 2026-09-14 (Adversarial track: DANN + invariance-drop + demographic ablation; and resampling A/B) 🔬
+
+**Why.** Two approved research directions, deadline passed → pure exploration (container frozen).
+(1) Adversarial: can we *force* the encoder to learn site-invariant physiology? — batch A =
+hand-crafted site-discriminative feature-drop + demographic ablation; batch B = a learned DANN with
+a gradient-reversal layer. (2) Resampling: harmonize all signals to a common 200 Hz, since sites use
+diverse hardware. Ran on pdmle through the production stack, aggregate metrics only. Drivers under
+`scripts/adversarial/` and `scripts/resampling/`; writeup `scripts/adversarial/INVARIANCE_ABLATION_RESULTS.md`.
+
+- 🔬 **Site-invariance feature-DROP REVERSES sign under the two-lever stack (largest ranking lever
+  found).** Earlier (2026-08-18) drop-frac was rejected on RAW feats. Re-tested on **rank-norm +
+  tuned-threshold**: dropping the top ~10–40% most site-discriminative features (between/within-site
+  variance ratio, fit on TRAIN sites only) is now **net-positive** — large-cohort LOSO AC-AUROC
+  0.6055→peak **0.6279 @40%** (stable ~0.62 at 10–20%); π-reward +0.0957→+0.1358; oracle
+  +0.1765→+0.2270. Carried by Emory+BIDMC; Kaiser dips −0.010. Transfer-reward noisy (threshold
+  sensitivity). The batch-effect removal (rank-norm) is what makes invariance-drop productive.
+  Pairs with [[rank-norm-verdict]], [[site-invariance-drop-verdict]].
+- ⚠️ **Demographic ladder — physiology-only HURTS, age-as-feature is a confound trap.** Dropping BMI
+  (pure physiology) regresses transfer −0.0207. Adding **age as a feature** inflates raw AUROC
+  0.6674→0.7360 but leaves **AC-AUROC flat (0.6028)** and **collapses transfer +0.1712→+0.0463** —
+  the age-adjusted metric discounts exactly what age buys, and the reward threshold stops
+  transferring. Vindicates the champion's demographic-light (BMI-only, no age) design.
+  See [[demographic-ablation-verdict]].
+- 🔬 **DANN = NO-SHIP, adversary inert.** GRL-MLP (λ∈{0,.01,.1,.3,1}, 3 seeds, 64-dim emb): the
+  gradient-reversal barely dents site-decodability (z_site_acc 0.857→0.853 across all λ — the 64-dim
+  bottleneck alone compresses site, not the adversary). MLP ranks fine (AC-AUROC 0.63–0.64) but
+  **reward transfer is NEGATIVE, worse than the GBM's +0.1712.** Only 2 training sites → data-starved
+  adversary; site is partly missingness-driven (rank+fill makes site 100% RF-decodable via the
+  site-constant 0.5 fill columns). Hand-crafted feature-drop (above) beats learned soft invariance.
+  Lands with the deep-net NO-SHIPs [[jepa-exploration]], [[minirocket-screen-verdict]].
+  See [[dann-adversarial-verdict]].
+- 🔬 **Resampling to 200 Hz = NO-SHIP (near-null, deployable metric slips).** ~97.6% of the cohort is
+  already 200 Hz (BIDMC+Kaiser); only Emory's 500 Hz subset (317 rows, ~2.4%) changes → scoped
+  Emory-only re-extraction at 200 Hz, spliced into native CSVs, paired LOSO A/B. **Emory's own fold
+  clearly benefits** (AC-AUROC 0.6172→0.6789, AUROC 0.6322→0.6961 — consistency with the 200 Hz
+  training sites), but pooled ranking barely moves (AC-AUROC +0.0076, AUROC +0.0010) and the
+  **deployable transfer-reward DROPS −0.0256** (+0.1712→+0.1457); AUPRC −0.0216. Kaiser/BIDMC swings
+  are pure LOSO ripple (their features unchanged; each fold trains on re-extracted Emory).
+  **Confirms fs-robustness:** the pipeline extracts rate-invariant physical-Hz features at native
+  rate, so harmonizing sampling rate is not a lever — papers resample because they feed *raw
+  waveforms* to fixed-input-rate deep nets; we don't. See [[resampling-verdict]].
+
+---
+
+## 2026-09-10 (Within-night normalization lever + MiniRocket raw-EEG screen) 🔬
+
+**Why.** Two follow-ups: (a) rank-norm removes the BETWEEN-site batch effect but not WITHIN-site,
+per-NIGHT amplifier gain — so test physiology-referenced normalization on the stage-resolved
+features, ON TOP OF per-site rank; (b) give the cheapest/most-deployable raw-signal method
+(MiniRocket) one honest screen. Ran on pdmle through the production stack, aggregate metrics only.
+Drivers `scripts/within_night/within_night_test.py` and `scripts/minirocket/minirocket_screen.py`;
+writeups `scripts/within_night/WITHIN_NIGHT_RESULTS.md`, `scripts/minirocket/MINIROCKET_RESULTS.md`.
+
+- 🔬 **Within-night ratio-over-N2 is the FIRST net-positive *feature-engineering* lever** in the
+  whole exploration (every other feature lever came back neutral/harmful). Adding `f_stage / f_N2`
+  for each stage-resolved metric, on top of per-site rank: large-cohort LOSO **AC-AUROC
+  0.6055→0.6092, AUROC 0.6674→0.6710, reward-neutral**. Small but real and orthogonal.
+- ⚠️ **The lift is non-uniform** — carried by BIDMC (+0.009 AC-AUROC, the 5075-row majority) and
+  Emory (+0.010); **Kaiser dips −0.007** and pooled AUPRC slips 0.1542→0.1473. Marginal win,
+  strongest on the two non-fine-tuned sites. N2 beats wake as the reference. Ships if the container
+  reopens: **per-site rank + within-night ratio-over-N2**. Pairs with [[rank-norm-verdict]].
+- ⚠️ **zwithin (z-across-stages)** is discrimination-neutral but lifts reward-threshold **transfer
+  +0.007 / oracle ceiling +0.015** (reward-side only, optional). **abs-only zwithin wrecks transfer
+  (NO)**, and **ratio+zwithin does NOT stack** — 897 feats on 497 positives drops below baseline and
+  collapses transfer to +0.039. Promote ratio(N2) **alone**. Confirms within-night self-referencing
+  is the productive axis, unlike further *global* normalization (z-score/INT/ComBat all tie-or-worse).
+- 🔬 **MiniRocket raw-EEG screen: NO-SHIP (13th neutral/negative screen).** Central-EEG N2+N3 30s
+  epochs → MiniRocket PPV (~10k feats) → ridge, LOSO-honest (params fit on train sites only). Both
+  aggregate readouts miss the AUROC>0.6 gate — **pooled-LOSO 0.5552 (AC 0.5093), pooled 5-fold CV
+  0.5670 (AC 0.4827, below chance)**. Only Emory (n=28, 8 pos) clears the gate = noise; Kaiser below
+  chance (0.485). Raw waveform shape adds no site-transferable CI signal beyond the 436 engineered
+  features — lands with the raw-signal NO-SHIPs [[jepa-exploration]], [[embedding-fusion-verdict]],
+  matching the 2026-winner pattern (simple feats+GBM beats foundation-model complexity,
+  [[competitor-methods-2026]]).
+
+---
+
+## 2026-09-10 (The other 4 "highest-value gaps": decision threshold, pairwise ranking, gain-invariance, event ablation) 🔬
+
+**Why.** Having tested lever #1 (rank-norm) below, ran the remaining four gaps from
+[[competitor-methods-2026]] as LOSO arms through the production stack on **both** cohorts.
+Driver `scripts/levers/levers_test.py`; full writeup `scripts/levers/LEVERS_RESULTS.md`.
+Standard cache reproduces the anchor to 4 dp; large cohort (497 pos, full 427-feat space
+incl nk/micro) is the trusted read. Ran on pdmle, aggregate metrics only.
+
+- 🔬 **Only ONE of the four converts: the *tuned* reward threshold.** On rank-norm feats the
+  deployable **cross-site transfer** threshold hits **+0.1712** reward — essentially the oracle
+  ceiling (+0.1765) — vs +0.0957 at π and **+0.0605** raw@π baseline. **≈2.8× the baseline
+  deployable reward, no leakage.** rank-norm (normalization) + tuned threshold (decision) is the
+  two-lever stack to carry if the container reopens. Pairs with [[rank-norm-verdict]].
+- ⚠️ **q>pₐ decision rule (team 476) is NO-SHIP** — regresses on both cohorts (large +0.0712 <
+  π +0.0957; standard +0.148 < +0.263). The Bayes-optimal form needs an *age-band-calibrated*
+  posterior; ours is marginal. Verified the derivation against `compute_reward`: predict + iff
+  q>p. Value is in *tuning* the threshold, not the q>pₐ rule.
+- ⚠️ **Age-matched pairwise ranking loss (±2yr) is NO-SHIP** — linear pairwise (AC-AUROC 0.579)
+  and linear pointwise (0.592) both trail the nonlinear HGB (0.606) on the very metric pairwise
+  is meant to optimize. Model class dominates the loss function.
+- ⚠️ **Drop amplitude/RMS (gain-invariance) is NO-SHIP** — ~neutral for discrimination
+  (AC-AUROC +0.003) but **collapses reward-threshold transfer** (+0.171→+0.009). Per-site rank
+  already neutralizes amplifier gain, so dropping µV-scale absolutes only removes signal.
+- 🔬 **Event-feature ablation (476's claim): partially reproduced, marginal.** Dropping events
+  *helps* discrimination on the large cohort (AC-AUROC +0.007, AUROC +0.005) but hurts reward
+  transfer. Not 476's clean "AUROC↑/AC-AUROC↓" dissociation — dropping helps both. Optional micro-tweak.
+- ⚠️ **Inverse-normal-transform normalization does NOT beat uniform-percentile rank** (added
+  `--norm-only` arm). Ties on discrimination but reward-threshold transfer collapses (+0.072 vs
+  rank +0.171) — the *bounded* [0,1] rank scale is what makes the threshold transfer across sites.
+  Keep uniform-percentile rank ([[rank-norm-verdict]]).
+- 🖼️ **Netphys PoC: added a combined pooled/non-CI/CI × 5-stage figure** (`render_combined_graphs`
+  in `scripts/netphys/netphys_graphs.py`; `netphys_poc_graphs_combined.png`) tying the three TDS
+  networks into one comparison; makes the CI EMG↔cortex decoupling readable against the pooled row.
+
+---
+
+## 2026-09-10 (Per-site rank-norm + reward-threshold prototype; TDS PoC report) 🔬
+
+**Why.** Competitor review ([[competitor-methods-2026]]) flagged two untried, high-value
+levers from the top teams: SIREN's (team 480, 6th) **per-site rank normalization** as a
+batch-effect remover, and the 476/553 **reward-aware decision threshold**. Prototyped both
+on the champion features through the exact production LOSO stack. `scripts/rank_norm/`
+(`rank_norm_test.py` standard cache, `rank_norm_large.py` large cohort); ran on pdmle as
+data account, aggregate metrics only. Full writeup: `scripts/rank_norm/RANK_NORM_RESULTS.md`.
+
+- **Anchor reproduced to 4 decimals** — `moe_none` = AC-AUROC 0.6352 / AUROC 0.7117 /
+  reward@π +0.2738 (matches champion). Plumbing trusted.
+- 🔬 **MoE == pooled, bit-for-bit, on BOTH cohorts** — the site-MoE + Kaiser fine-tune head
+  is **dead weight under LOSO** (no expert for a held-out site → global fallback). Corroborates
+  [[model-architecture-findings]] "router dead / pooled≥MoE" independently.
+- 🔬 **Per-site rank-norm = first batch-effect lever with a consistent positive LOSO lift.**
+  On the well-powered **large cohort (497 pos)**: AC-AUROC **0.5898→0.6154 (+0.026)**, AUROC
+  0.6549→0.6739 (+0.019), deployable reward +0.0882→+0.0985, reward ceiling +0.161→+0.198.
+  It **beats per-site z-score** (0.6105) — z-score was previously rejected — and is
+  transductive/label-free, so hidden-site-legal by construction. Validates SIREN on our data.
+  (Standard 84-pos cohort *looked* like −0.03 AC-AUROC harm — that was small-n noise; the
+  positive-count-limited wall again, cf. [[hdbscan-clustering-probe]].)
+- 🔬 **Reward-threshold lever alone is a near-no-op** on RAW features (a naively transferred
+  reward threshold is *worse* than π because the threshold is site-scale-dependent; oracle
+  ceiling barely > π → confirms the global threshold was already ≈optimal). Its value is
+  **conditional on rank-norm**: once features are rank-normalized the reward threshold
+  transfers cleanly across sites (transfer ≈ oracle) and the oracle ceiling rises. The two
+  metrics still pull opposite ways (AC-AUROC vs reward), per competitor lesson #4.
+- **Status:** exploration only (deadline passed, container frozen). If the model reopens,
+  rank-norm belongs as the normalization layer and is the right pairing for any future TDS block.
+
+## 2026-09-10 (Network-physiology TDS proof-of-concept — report) 📊
+
+**What.** Wrote `scripts/netphys/TDS_POC_REPORT.md` — an educational report on the
+brain–organ Time-Delay-Stability network PoC (`scripts/netphys/`, run earlier on 18
+recordings). Covers what Network Physiology / TDS is, why we built it (white space — no
+competitor built brain↔organ graphs), the method, and results from
+`exports/netphys_poc_{graphs,heatmaps,ci_contrast}.png`.
+
+- ✅ **Validity check passed** — pipeline recovers the textbook stage reconfiguration
+  (network densest in light sleep N1/N2 density 0.19–0.24, collapses in N3 to 0.08, REM
+  intermediate) and physiologically sensible link structure (homologous cross-region
+  same-band cortical coupling dominant: C·β–O·β 0.83–0.94; organ links an order weaker).
+- 🔬 **Candidate CI signature (descriptive, n=18):** in N2, chin **EMG↔cortex coupling
+  decouples** in CI (mean 0.198→0.086; C·σ–EMG −0.253, O·σ–EMG −0.248, C·β–EMG −0.219),
+  with a mild *increase* in brain↔heart / homologous-θ coupling. Coherent and mechanistically
+  plausible, but ⚠️ **not yet predictive evidence** — must clear LOSO + batch-effect + reward
+  gates (pair with rank-norm above). Descriptive/publishable on its own regardless.
+
+## 2026-09-04 (HDBSCAN unsupervised pattern probe on the 1103×436 matrix) 🔬
+
+**Why.** Asked whether density clustering surfaces structure — by site, by CI — the champion
+misses. Standardize → UMAP(10-D) → `sklearn.cluster.HDBSCAN`, then measure cluster alignment
+with site vs CI. `scripts/eda/hdbscan_probe.py` (parameterized by `--cache` so it re-points at
+PSG-feature / embedding matrices later); ran on pdmle as `arshia_ilaty_physio26`. Aggregate only.
+
+- **Site is NOT the manifold driver** (corrected a prior worry about batch-effect dominance).
+  Sites fully intermixed: silhouette(site, UMAP-10) ≈ **0.001**, cluster↔site **ARI ≈ 0** (−0.02),
+  every cluster ~70–90 % S0001 (just mirrors S0001 = 78 % of cohort). A batch signal *exists* in
+  the features (5-fold RF predicts site at **0.913** vs 0.777 majority) but doesn't shape the
+  geometry — reassuring re: LOSO confounding.
+- **CI is a diffuse gradient, not a cluster.** cluster↔CI **ARI ≈ 0**, NMI ≈ 0.02 — no discrete CI
+  mode (expected at 7.6 %). But per-cluster prevalence spreads **1.7 % → 12.5 %** (mcs=40: c1 n=121
+  CI 1.7 % / age 58 → c0 n=255 CI 12.5 % / age 65), and the enriched clusters are the **older**
+  ones. The clustering carves one connected **age/severity continuum** (≈41 % noise) that CI rides
+  along — i.e. it re-finds the `age` axis the champion already dominates.
+- 🔬 **Verdict — no predictive help; useful as QC/exploration.** No CI cluster to exploit; the
+  cluster gradient is redundant with `age`. Descriptively valuable: confirms a smooth age/severity
+  manifold with sites well-mixed. Figure (`/tmp/sleeper_umap.png`, 3-panel UMAP) kept local, gitignored.
+- 🔬 **Gate-confirmed NO-SHIP (Δ exactly 0).** Fed the 4 cluster indicators (mcs=40 one-hot) through
+  the LOSO fusion gate (`coup_gate_ab.py` + `make_cluster_csv.py`): base+cluster is **bit-identical**
+  to baseline (AC-AUROC 0.6352 / AUROC 0.7117 / reward +0.2738; Δ=+0.0000, zero-width CI). The champion
+  never uses them — total redundancy with the 436 features. 12th neutral screen at the n_pos=84 wall.
+- 🔬 **Same probe on the SleepFM stage embeddings (1080×2560) — batch-effect diagnosis.** The learned
+  embeddings behave **oppositely** to the tabular features: site is **strongly** encoded (5-fold RF
+  decodes site at **0.980** vs 0.775 baseline; silhouette(site, UMAP-10)=**0.111**; cluster↔site
+  **ARI=0.29**, NMI=0.32 — HDBSCAN carves a 100%-I0006 cluster and pure-S0001 clusters, 0% noise).
+  CI stays diffuse (cluster↔CI ARI≈0.03) though one small subcluster hits 19–25% CI (2.7–3.5× base),
+  but it's age-elevated and site-mixed. **Mechanistic explanation for why embedding fusion was DEAD
+  under LOSO** ([[embedding-fusion-verdict]]): the representation is organized primarily by
+  site/montage/device, so a model trained on 2 sites keys off site structure that can't transfer to
+  a held-out 3rd. Builder `build_emb_matrix.py`; figure `/tmp/emb_umap.png`.
+- 🔬 **Confirmed on `embeddings_by_stage_pure` (1080×2560) — batch effect is intrinsic to SleepFM.**
+  Site stays near-perfectly decodable (5-fold RF **0.961** vs 0.775 base), so the batch signal is not
+  an artifact of the stage variant. Geometry is a touch *less* blob-separated than the stage set:
+  silhouette(site, UMAP-10)=**−0.040** (vs +0.111), cluster↔site **ARI=0.16** (vs 0.29) — I0002 sits
+  *inside* the S0001 blob and the top-right islands mix S0001+I0006, yet HDBSCAN still recovers a
+  99%-I0006 cluster and 100%-S0001 clusters (7 clusters, 0.2% noise). Takeaway: site info persists but
+  is carried more nonlinearly/distributed here (high RF ≠ clean UMAP separation). CI still diffuse
+  (cluster↔CI ARI=0.016); one cluster (c3, n=61) reaches **21% CI** at elevated age 63.4 — the same
+  age-linked gradient, not a clean CI mode. Figure `/tmp/emb_pure_umap.png`. Both embedding variants
+  → same verdict: strong site decodability = LOSO batch-leakage → fusion DEAD.
+
+---
+
+## 2026-09-03 (Tool scouting: colleague feature-selection toolkit + network-physiology repo) 🔬
+
+**Why.** Two outside tools worth checking against our 436-feature champion — a colleague's
+generic `FeatureSelection` battery (`/home/arshia/featureselection`, never run on our data), and
+the manager-mentioned `causal_networks_physiology` (directed cross-system coupling). Both are
+**scouting**: neither changes the champion; anything they motivate still clears the LOSO fusion gate.
+Full write-up: `scripts/featsel/README.md`.
+
+- **Feature-selection toolkit — ran on the 1103×436 matrix (pdmle; y+=84, 7.6 %).** Drivers
+  `scripts/featsel/{run_featsel_physionet.py,featsel_finish.py}`: load the cache, drop
+  identifiers/leakage, median-impute, run the battery with per-method guards, write aggregate
+  rankings (gitignored, aggregate-only). **11 methods** produced a consensus: ANOVA-F, MIC, RF
+  impurity, XGB split-count & coverage, RF permutation, Boruta, SHAP (TreeExplainer substitute),
+  LGBM gain & split, mRMR. Null-importance columns computed but excluded from consensus.
+  - **Four fixes needed** (2-yr-old code vs current libs): module-level `from minepy import MINE`
+    made a missing optional dep fatal to the *whole* import (installed minepy + boruta/mrmr/xgboost/
+    shap); LightGBM 4.x dropped the `categorical_feature=` kwarg from `lgb.train` (recomputed via
+    `booster.feature_importance`); `mrmr_classif` now returns <K features, breaking the length-K
+    frame (mapped returned order→rank); SHAP `KernelExplainer` intractable at 436 feats (→ RF
+    `TreeExplainer`).
+  - 🔬 **Result — validates, doesn't extend.** Consensus top-20 re-derives our own
+    `stats_significance.py` physiology with no new predictor: **EEG theta slowing** dominates
+    (N1/N2/wake theta power + theta/alpha), plus **fragmentation** (`arch__trans_p_wake_n1` is #1;
+    N1/REM arousal indices), **REM microstructure** (RSWA phasic/min), and **age/bmi**. `age`/`bmi`
+    sit at median-rank 2 but mean-rank ~30–37 (tree split-count methods under-rank collinear
+    demographics — mean-rank consensus is a heuristic). **Boruta confirms only 5 of 436 features**
+    (8 incl. tentative) as reliably relevant — the same **n_pos=84 / 3-site** wall behind the 10
+    JEPA NO-SHIPs, restated by an independent tool. Caveat: whole-cohort, no site holdout →
+    prioritisation only, not LOSO lift.
+- **`causal_networks_physiology` (Moritz Günther) — assessed, not ported.** Network-Physiology
+  research code: **directed cross-system coupling** (breath↔heart↔EEG-alpha at 1 Hz, per sleep
+  stage) via **Granger G-causality** (statsmodels VAR + ADF stationarity) and **MPRSA** (multivariate
+  phase-rectified signal averaging); validated on aging/OSA-vs-young, no `requirements.txt`.
+  - **Verdict — worth a small time-boxed experiment; do NOT vendor.** It hits the one axis our
+    EEG-dominated champion under-exploits (directed autonomic↔cortical↔respiratory coupling), and
+    unlike multimodal JEPA (NO-SHIP #8, diluted EEG) these are **low-dim interpretable scalars**, a
+    different failure mode. Caveats: targets aging/OSA not CI; it's a **port** (re-implement the
+    estimators against our pipeline), not a plug-in; the n_pos=84/LOSO wall still gates it.
+    Suggested minimal probe: breath↔HR + HR↔EEG-band G-causality + one PRSA coupling scalar per
+    NREM/REM → run through the existing fusion gate; neutral closes it.
+  - 🔬 **Ran the probe — NO-SHIP (measured).** Ported the Granger-G core to `scripts/netphys/`
+    (`coupling.py` estimator + `signals.py` 1-Hz breath/heart/EEG-alpha reconstruction +
+    `export_coupling_features.py`; self-test recovers an injected breath→heart coupling). Exported
+    **14 directed-coupling scalars** (6 ordered pairs × NREM/REM + a stationarity-coverage `statfrac`
+    per group) for **1066/1103** recordings on pdmle (8 shards; 4-way after 8-way OOM-killed workers
+    on the 30G box). Ran `coup_gate_ab.py` (LOSO, pooled fitter, official metrics, 2000-boot paired
+    on aligned OOF) both raw and with a per-fold train-only univariate AUROC≥0.6 filter:
+    | arm | AC-AUROC | AUROC | reward |
+    | --- | --- | --- | --- |
+    | baseline (champion) | 0.6352 | 0.7117 | +0.2738 |
+    | + coupling (raw) | 0.6154 | 0.6886 | +0.2841 |
+    | + coupling (filtered) | 0.6101 | 0.6909 | +0.2919 |
+    Paired Δ AC-AUROC = **−0.0209** [−0.0544,+0.0131] raw / **−0.0259** [−0.0536,+0.0009] filtered;
+    reward Δ +0.009/+0.019 but CIs straddle 0. **Primary metric degrades in both arms → COUP_GATE_NOSHIP.**
+    The signal is real but redundant: strongest single coupling is **NREM EEG-alpha→heart-rate**
+    (whole-cohort AUROC 0.637, |d| 0.31), then REM cardiac↔EEG (~0.60–0.62); breath couplings are
+    near-chance — all collinear with the EEG-spectral + HRV features the champion already has. Adding
+    interpretable low-dim features does **not** escape the n_pos=84/LOSO wall (11th neutral screen).
+    Full write-up: `scripts/netphys/README.md`.
+
+---
+
 ## 2026-08-28 (End-to-end supervised fine-tuning of the V2 EEG encoder) ⚠️
 
 **Why.** All 9 prior JEPA runs used the encoder as a **frozen** feature extractor (pool CLS
