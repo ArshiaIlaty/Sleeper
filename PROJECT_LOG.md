@@ -9,6 +9,112 @@ Legend: ✅ done & verified · 🔬 verified against data · 📌 needs follow-u
 
 ---
 
+## 2026-09-16 (Spectral-shape "full batch" + subset probe: aperiodic 1/f + entropy + SEF95 + across-night variability) 🔬
+
+**Why.** After the FFT/STFT discussion (FFT is already the band-power backbone; STFT-CNN/ISTFT
+pattern-match the raw-waveform NO-SHIPs), the user chose the "full spectral batch": extract the
+spectral-SHAPE features the champion band-power block never captured, as engineered scalars, and A/B
+them through the production stack. Families: **aperiodic 1/f** (exponent + offset, log-log OLS of the
+Welch PSD over 2–30 Hz — a validated E/I / aging marker that also de-mixes band power = periodic peak
++ 1/f offset), **spectral entropy** (normalized Shannon over 0.5–30 Hz), **SEF95 + median freq**, and
+**across-night variability** (within-N2 and pooled-sleep std of each). 30 `sp__` features/recording
+(5 metrics × {wake/n2/n3/rem means} + {n2std, sleepstd}). Full-PSD extraction reuses the
+`export_epoch_features.py` harness (central-EEG pick, CAISR stages, same Welch nperseg as the shipped
+band-power block) — `scripts/spectral/{export_spectral_extra,merge_spectral,spectral_ab}.py`.
+
+**Cohort = STANDARD (n=1090, 84 pos; BIDMC 847/56, Kaiser 190/20, Emory 53/8), NOT large.** The large
+cohort's 6530 raw EDFs live in S3 (`sources.physio_path` streams into a 382 MB size-capped cache) → a
+full-PSD pass is a terabytes/hours job; the standard cohort's EDFs are on local disk, so it is the
+cheap gate that decides whether the S3 pass is even worth it. Extraction: 8 shards as the
+`arshia_ilaty_physio26` dataset account (system numpy/scipy/edfio), ~30 min (disk-bound, 8 concurrent
+EDF readers), **1090/1090 matched, 0 errors** (980 all-finite; the rest miss a stage, NaN-safe in HGB).
+A/B rebuilds the champion matrix identically to `levers_test.load_csv` (cross-check assertion) + 30
+cols; both arms run per-site rank-norm → HGB LOSO → decision_rules. Aggregate JSON only leaves the box
+(DUA); per-recording CSV stays. `scripts/spectral/out/spectral_ab_standard.json`.
+
+| arm | AC-AUROC | AUROC | AUPRC | π | transfer | oracle | q>pₐ |
+|-----|---------:|------:|------:|--:|---------:|-------:|-----:|
+| champion | 0.5996 | 0.6477 | 0.1491 | +0.1840 | **+0.1509** | +0.2599 | +0.1402 |
+| +spectral | 0.6030 | 0.6635 | 0.1668 | +0.1684 | **+0.0329** | +0.2606 | +0.1113 |
+| Δ | +0.0034 | +0.0158 | +0.0178 | −0.0156 | **−0.1180** | +0.0007 | −0.0289 |
+
+- ⚠️ **NO-SHIP — 14th neutral/negative screen.** Ranking nudges up (AUROC +0.016, AUPRC +0.018;
+  per-site AC-AUROC BIDMC +0.030, Emory +0.022, Kaiser −0.009) but the **deployable transfer reward
+  collapses −0.118** and π / q>pₐ also drop; **oracle is flat (+0.0007)** ⇒ no genuinely separable
+  cross-site structure was added.
+- 🔬 **Mechanism = a site-level shift, not a ranking gain.** Per-site reward@π: **Kaiser
+  +0.4722 → −0.0043 while its AUROC is FLAT (0.605→0.604).** The spectral features don't reorder
+  Kaiser's patients — they shift Kaiser's score *level*, and because the transfer rule borrows
+  thresholds across sites (only 3 sites), that level-shift poisons the pooled deployable reward. The
+  aperiodic **offset** is essentially an amplitude/montage term (different amplifiers/referencing per
+  site), a prime injector of site signal.
+- 📌 Coherent with prior findings, not noise: fs-invariance (spectral shape adds nothing raw-new,
+  2026-09-14 resampling), calibration-in-the-large drift (2026-09-15), and the rank-norm /
+  site-invariance-drop result that the winning direction is REMOVING site-discriminative signal, not
+  adding it. **Does not justify the S3 large-cohort pass.**
+
+**Subset probe (same A/B on column subsets, no re-extraction) — the collapse is NOT offset-driven.**
+`scripts/spectral/out/spectral_ab_subsets.json`. Tests whether dropping the amplitude/montage-dependent
+aperiodic offset (and, further, the std families and med_freq) salvages the transfer reward.
+
+| arm | ncols | AC-AUROC | AUROC | AUPRC | π | transfer | oracle | q>pₐ |
+|-----|------:|---------:|------:|------:|--:|---------:|-------:|-----:|
+| champion | 0 | 0.5996 | 0.6477 | 0.1491 | +0.1840 | **+0.1509** | +0.2599 | +0.1402 |
+| +full | 30 | 0.6030 | 0.6635 | 0.1668 | +0.1684 | **+0.0329** | +0.2606 | +0.1113 |
+| +no_offset | 24 | 0.6010 | 0.6595 | 0.1733 | +0.1875 | **+0.0344** | +0.2680 | +0.1649 |
+| +shape_means | 12 | 0.6025 | 0.6583 | 0.1574 | +0.2325 | **+0.0605** | +0.2688 | +0.1520 |
+
+- ⚠️ **Dropping `aper_off` does NOT rescue transfer** (`no_offset` Δtransfer −0.1165 ≈ full's −0.1180),
+  and pure `shape_means` (exponent+entropy+SEF95 stage-means, 12 cols) still collapses transfer
+  (−0.0904). The site contamination is **intrinsic to spectral shape across these 3 sites, not isolated
+  to the amplitude term** — no subset recovers the deployable lever ⇒ **NO-SHIP confirmed/strengthened.**
+- 📌 Nuance: dropping the offset/std families *does* help the fixed-threshold rules — `shape_means`
+  gives the best π (+0.2325, +0.0485 vs champ) and `no_offset` the best q>pₐ (+0.1649 vs champ +0.1402)
+  — but on the thin standard cohort those rules are volatile (Emory n=53/8pos) and the transfer
+  threshold is the lever validated on the large cohort, which breaks in every subset.
+
+---
+
+## 2026-09-15 (Calibration / reliability probe: per-site drift, isotonic on/off, slope-intercept) 🔬
+
+**Why.** The official scorer has NO calibration metric (only reward/AUROC/AC-AUROC/AUPRC), so we
+never measured calibration quality — yet the shipped model applies isotonic calibration
+(`feature_prep.fit_clf` wraps HGB in `CalibratedClassifierCV(method="isotonic", cv=min(3,n_min))`).
+Hypothesis: the tuned cross-site **transfer threshold** is our top deployable lever precisely
+*because* probabilities are miscalibrated across sites. Ran LOSO on the large cohort producing BOTH
+the uncalibrated base-HGB OOF and the production isotonic OOF, for raw-feature and rank-norm reps.
+Driver `scripts/calibration/calib_probe.py` (aggregate JSON only, DUA-safe); reliability diagrams
+`scripts/calibration/gen_reliability_html.py` → `out/reliability.html`. The rank-norm + isotonic arm
+reproduces the champion EXACTLY (AUROC 0.6674, transfer +0.1712, π +0.0957, oracle +0.1765) → probe
+verified faithful to production.
+
+- 🔬 **Calibration DRIFTS strongly by site (Q1).** On the base HGB (isotonic OFF, rank-norm),
+  per-held-out-site ECE: **BIDMC 0.017 (well-calibrated), Emory 0.085, Kaiser 0.097 (worst)** —
+  quality is highly site-dependent. All per-site calibration **slopes < 1 (0.56–0.65)** ⇒ the model
+  is **over-confident** on unseen sites. The **intercepts are large and strongly site-specific**
+  (BIDMC −1.04, Kaiser −1.39, Emory +0.06) — a big **calibration-in-the-large** drift: trained on
+  the other sites' base rates, the model systematically mis-levels the held-out site's risk.
+- 🔬 **Isotonic does NOT fix cross-site calibration, but is essential for the transfer threshold
+  (Q2).** Pooled ECE gets **WORSE** with isotonic (rank-norm 0.032→0.066; raw 0.045→0.092) and Brier
+  slightly worse — as a recalibrator for an *unseen* site it backfires. Per-site it fixes the SLOPE
+  (0.56–0.65 → ~0.75–1.14, killing over-confidence) but leaves the **intercept still large and
+  site-specific** (level uncorrected). Reward A/B (rank-norm, OFF→ON): **transfer −0.0095→+0.1712**
+  (isotonic is what makes a borrowed threshold usable), but **π +0.1389→+0.0957 (worse)**, oracle
+  +0.1607→+0.1765, q>pₐ +0.0864→+0.0712. So calibration and threshold-tuning are **coupled, not
+  redundant**: isotonic reshapes per-site slope so the transferred threshold lands; the threshold
+  then absorbs the residual site-level (intercept) drift isotonic leaves behind. **This confirms the
+  mechanism** — the tuned transfer threshold ([[levers-four-verdict]]) is an implicit per-site
+  level-recalibration, which is why it's our largest deployable lever.
+- ⚠️ **Caveat: `CalibratedClassifierCV(cv=3)` is also a 3-model bag.** AUROC rises +0.013–0.015 with
+  "isotonic ON" (raw 0.6444→0.6594; rank 0.6542→0.6674), so the ON arm conflates isotonic
+  recalibration with 3-fold ensembling — part of the transfer gain is bagging, not calibration proper.
+- 📌 A principled alternative to the threshold hack would be explicit per-held-out-site
+  level-recalibration (intercept correction), but that needs held-out-site labels we don't have for a
+  truly new site — the transfer threshold borrows from other sites instead, so the current design is
+  well-justified. See [[calibration-reliability-verdict]].
+
+---
+
 ## 2026-09-14 (Adversarial track: DANN + invariance-drop + demographic ablation; and resampling A/B) 🔬
 
 **Why.** Two approved research directions, deadline passed → pure exploration (container frozen).

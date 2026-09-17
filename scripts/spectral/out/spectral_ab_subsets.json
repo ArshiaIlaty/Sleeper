@@ -1,0 +1,299 @@
+{
+  "cohort": "standard",
+  "n": 1090,
+  "pos": 84,
+  "n_champ_feats": 427,
+  "all_spectral_cols": [
+    "sp__aper_exp_wake",
+    "sp__aper_exp_n2",
+    "sp__aper_exp_n3",
+    "sp__aper_exp_rem",
+    "sp__aper_exp_n2std",
+    "sp__aper_exp_sleepstd",
+    "sp__aper_off_wake",
+    "sp__aper_off_n2",
+    "sp__aper_off_n3",
+    "sp__aper_off_rem",
+    "sp__aper_off_n2std",
+    "sp__aper_off_sleepstd",
+    "sp__spec_ent_wake",
+    "sp__spec_ent_n2",
+    "sp__spec_ent_n3",
+    "sp__spec_ent_rem",
+    "sp__spec_ent_n2std",
+    "sp__spec_ent_sleepstd",
+    "sp__sef95_wake",
+    "sp__sef95_n2",
+    "sp__sef95_n3",
+    "sp__sef95_rem",
+    "sp__sef95_n2std",
+    "sp__sef95_sleepstd",
+    "sp__med_freq_wake",
+    "sp__med_freq_n2",
+    "sp__med_freq_n3",
+    "sp__med_freq_rem",
+    "sp__med_freq_n2std",
+    "sp__med_freq_sleepstd"
+  ],
+  "coverage": {
+    "n_rows": 1090,
+    "spectral_matched": 1090,
+    "rows_all_spectral_finite": 980,
+    "n_spectral_cols": 30
+  },
+  "champion": {
+    "pooled": {
+      "reward_at_pi": 0.1840002867122268,
+      "auroc": 0.6477385685884693,
+      "age_auroc": 0.5995975855130785,
+      "auprc": 0.14905311155655274
+    },
+    "rules": {
+      "pi": 0.1840002867122268,
+      "transfer": 0.1508880816279346,
+      "oracle": 0.25991744905697955,
+      "q_gt_pa": 0.14018568080175792
+    },
+    "per_site": {
+      "I0002": {
+        "n": 53,
+        "reward_pi": 1.3461426183519727,
+        "ac_auroc": 0.6739130434782609,
+        "auroc": 0.7250000000000001
+      },
+      "I0006": {
+        "n": 190,
+        "reward_pi": 0.47224514036890863,
+        "ac_auroc": 0.5331807780320366,
+        "auroc": 0.6047058823529412
+      },
+      "S0001": {
+        "n": 847,
+        "reward_pi": 0.21034102747747835,
+        "ac_auroc": 0.5885488647581442,
+        "auroc": 0.631208235506592
+      }
+    }
+  },
+  "subsets": {
+    "full": {
+      "n_cols": 30,
+      "cols": [
+        "sp__aper_exp_wake",
+        "sp__aper_exp_n2",
+        "sp__aper_exp_n3",
+        "sp__aper_exp_rem",
+        "sp__aper_exp_n2std",
+        "sp__aper_exp_sleepstd",
+        "sp__aper_off_wake",
+        "sp__aper_off_n2",
+        "sp__aper_off_n3",
+        "sp__aper_off_rem",
+        "sp__aper_off_n2std",
+        "sp__aper_off_sleepstd",
+        "sp__spec_ent_wake",
+        "sp__spec_ent_n2",
+        "sp__spec_ent_n3",
+        "sp__spec_ent_rem",
+        "sp__spec_ent_n2std",
+        "sp__spec_ent_sleepstd",
+        "sp__sef95_wake",
+        "sp__sef95_n2",
+        "sp__sef95_n3",
+        "sp__sef95_rem",
+        "sp__sef95_n2std",
+        "sp__sef95_sleepstd",
+        "sp__med_freq_wake",
+        "sp__med_freq_n2",
+        "sp__med_freq_n3",
+        "sp__med_freq_rem",
+        "sp__med_freq_n2std",
+        "sp__med_freq_sleepstd"
+      ],
+      "arm": {
+        "pooled": {
+          "reward_at_pi": 0.16838726758454925,
+          "auroc": 0.6634893022815489,
+          "age_auroc": 0.6029678068410462,
+          "auprc": 0.16684105934492088
+        },
+        "rules": {
+          "pi": 0.16838726758454925,
+          "transfer": 0.03287025238102665,
+          "oracle": 0.2606070070483379,
+          "q_gt_pa": 0.11126780203672346
+        },
+        "per_site": {
+          "I0002": {
+            "n": 53,
+            "reward_pi": 1.372263394765135,
+            "ac_auroc": 0.6956521739130435,
+            "auroc": 0.7416666666666667
+          },
+          "I0006": {
+            "n": 190,
+            "reward_pi": -0.004280123676862268,
+            "ac_auroc": 0.5240274599542334,
+            "auroc": 0.6042647058823529
+          },
+          "S0001": {
+            "n": 847,
+            "reward_pi": 0.23085874261932665,
+            "ac_auroc": 0.6184600197433366,
+            "auroc": 0.6676223586779845
+          }
+        }
+      },
+      "delta_pooled": {
+        "reward_at_pi": -0.015613019127677541,
+        "auroc": 0.015750733693079555,
+        "age_auroc": 0.003370221327967715,
+        "auprc": 0.017787947788368147
+      },
+      "delta_rules": {
+        "pi": -0.015613019127677541,
+        "transfer": -0.11801782924690796,
+        "oracle": 0.0006895579913583361,
+        "q_gt_pa": -0.02891787876503446
+      }
+    },
+    "no_offset": {
+      "n_cols": 24,
+      "cols": [
+        "sp__aper_exp_wake",
+        "sp__aper_exp_n2",
+        "sp__aper_exp_n3",
+        "sp__aper_exp_rem",
+        "sp__aper_exp_n2std",
+        "sp__aper_exp_sleepstd",
+        "sp__spec_ent_wake",
+        "sp__spec_ent_n2",
+        "sp__spec_ent_n3",
+        "sp__spec_ent_rem",
+        "sp__spec_ent_n2std",
+        "sp__spec_ent_sleepstd",
+        "sp__sef95_wake",
+        "sp__sef95_n2",
+        "sp__sef95_n3",
+        "sp__sef95_rem",
+        "sp__sef95_n2std",
+        "sp__sef95_sleepstd",
+        "sp__med_freq_wake",
+        "sp__med_freq_n2",
+        "sp__med_freq_n3",
+        "sp__med_freq_rem",
+        "sp__med_freq_n2std",
+        "sp__med_freq_sleepstd"
+      ],
+      "arm": {
+        "pooled": {
+          "reward_at_pi": 0.18746153095461499,
+          "auroc": 0.6594954085013727,
+          "age_auroc": 0.6009557344064387,
+          "auprc": 0.1733081286585711
+        },
+        "rules": {
+          "pi": 0.18746153095461499,
+          "transfer": 0.03435748339401441,
+          "oracle": 0.2679882679921062,
+          "q_gt_pa": 0.1649094385137203
+        },
+        "per_site": {
+          "I0002": {
+            "n": 53,
+            "reward_pi": 1.3919147188050756,
+            "ac_auroc": 0.6739130434782609,
+            "auroc": 0.7541666666666667
+          },
+          "I0006": {
+            "n": 190,
+            "reward_pi": 0.0603548771467628,
+            "ac_auroc": 0.47368421052631576,
+            "auroc": 0.5951470588235295
+          },
+          "S0001": {
+            "n": 847,
+            "reward_pi": 0.21974122382822497,
+            "ac_auroc": 0.6194471865745311,
+            "auroc": 0.6595177894166516
+          }
+        }
+      },
+      "delta_pooled": {
+        "reward_at_pi": 0.003461244242388195,
+        "auroc": 0.011756839912903327,
+        "age_auroc": 0.001358148893360167,
+        "auprc": 0.024255017102018356
+      },
+      "delta_rules": {
+        "pi": 0.003461244242388195,
+        "transfer": -0.11653059823392019,
+        "oracle": 0.008070818935126622,
+        "q_gt_pa": 0.02472375771196239
+      }
+    },
+    "shape_means": {
+      "n_cols": 12,
+      "cols": [
+        "sp__aper_exp_wake",
+        "sp__aper_exp_n2",
+        "sp__aper_exp_n3",
+        "sp__aper_exp_rem",
+        "sp__spec_ent_wake",
+        "sp__spec_ent_n2",
+        "sp__spec_ent_n3",
+        "sp__spec_ent_rem",
+        "sp__sef95_wake",
+        "sp__sef95_n2",
+        "sp__sef95_n3",
+        "sp__sef95_rem"
+      ],
+      "arm": {
+        "pooled": {
+          "reward_at_pi": 0.23251868802797027,
+          "auroc": 0.6582528637697624,
+          "age_auroc": 0.6024647887323944,
+          "auprc": 0.1573833090313822
+        },
+        "rules": {
+          "pi": 0.23251868802797027,
+          "transfer": 0.06045487073734527,
+          "oracle": 0.2687784318763228,
+          "q_gt_pa": 0.15204721426376577
+        },
+        "per_site": {
+          "I0002": {
+            "n": 53,
+            "reward_pi": 1.386573320712933,
+            "ac_auroc": 0.6739130434782609,
+            "auroc": 0.7347222222222223
+          },
+          "I0006": {
+            "n": 190,
+            "reward_pi": 0.1647903180316352,
+            "ac_auroc": 0.4965675057208238,
+            "auroc": 0.6001470588235294
+          },
+          "S0001": {
+            "n": 847,
+            "reward_pi": 0.21853184070918485,
+            "ac_auroc": 0.6097729516288253,
+            "auroc": 0.6512439046415026
+          }
+        }
+      },
+      "delta_pooled": {
+        "reward_at_pi": 0.048518401315743476,
+        "auroc": 0.010514295181293098,
+        "age_auroc": 0.0028672032193158836,
+        "auprc": 0.008330197474829465
+      },
+      "delta_rules": {
+        "pi": 0.048518401315743476,
+        "transfer": -0.09043321089058934,
+        "oracle": 0.008860982819343222,
+        "q_gt_pa": 0.011861533462007856
+      }
+    }
+  }
+}
